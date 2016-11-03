@@ -108,7 +108,6 @@ func main() {
 	)
 
 	log.Fatal(srv.ListenAndServe())
-
 }
 
 // If swagger is not on `/` redirect to it
