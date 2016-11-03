@@ -327,20 +327,21 @@ func (d *JobManager) execJob(request *restful.Request, response *restful.Respons
 
 func (d *JobManager) runJobExecution(key Key, seqno int) {
 	var retCode int
+	info("key.Ns=%s, key.Id=%s, seqno=%d\n", key.Ns, key.Id, seqno)
 	d.ExecChan[key] <- EXEC_GOROUTINE
 	if value, OK := d.JobCache.Get(key); OK {
-		info("key.Ns=%s, key.Id=%s, seqno=%d\n", key.Ns, key.Id, seqno)
 		if cancelStat := GetCancelStatus(key.Ns, key.Id, seqno); cancelStat == 1 {
 			d.accessLock.Lock()
 			<-d.ExecChan[key]
 			d.WaitExec[key].Done()
 			d.accessLock.Unlock()
+			info("key.Ns=%s, key.Id=%s, seqno=%d cancelled\n", key.Ns, key.Id, seqno)
 			return
 		}
 
 		job := value.(configdata.Job)
 		progress := configdata.Execution_INIT
-		info("begin to execute command")
+		info("key.Ns=%s, key.Id=%s, seqno=%d begin to execute command", key.Ns, key.Id, seqno)
 
 		//change the working dir
 		targetPath, err := filepath.Abs(WS_PATH + key.Ns + "/" + key.Id)
@@ -386,7 +387,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int) {
 
 		//pull code from git
 		if codeManager := job.GetCodeManager(); codeManager != nil && codeManager.GitConfig != nil {
-			info("begin to pulling code\n")
+			info("key.Ns=%s, key.Id=%s, seqno=%d begin to pulling code\n", key.Ns, key.Id, seqno)
 			progress = configdata.Execution_CODE_PULLING
 			gitInitCmd := &JobCommand{
 				Name: "git",

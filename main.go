@@ -4,12 +4,14 @@ import (
 	"flag"
 	"github.com/emicklei/go-restful"
 	"github.com/emicklei/go-restful/swagger"
+	"github.com/fvbock/endless"
 	"github.com/haveatry/She-Ra/api/jobs"
 	"github.com/haveatry/She-Ra/utils"
 	"github.com/magiconair/properties"
 	"log"
 	"net/http"
 	"path/filepath"
+	"syscall"
 )
 
 var (
@@ -19,6 +21,21 @@ var (
 	SwaggerPath string
 	SheRaIcon   string
 )
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	w.Write([]byte("WORLD!"))
+
+}
+
+func preSigUsr1() {
+	log.Println("pre SIGUSR1")
+
+}
+
+func postSigUsr1() {
+	log.Println("post SIGUSR1")
+
+}
 
 func main() {
 	flag.Parse()
@@ -78,10 +95,19 @@ func main() {
 
 	// Serve favicon.ico
 	http.HandleFunc("/favion.ico", icon)
-	//http.Handle("/log", websocket.Handler(WatchLog))
 
 	info("ready to serve on %s", basePath)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	srv := endless.NewServer(addr, nil)
+	srv.SignalHooks[endless.PRE_SIGNAL][syscall.SIGUSR1] = append(
+		srv.SignalHooks[endless.PRE_SIGNAL][syscall.SIGUSR1],
+		preSigUsr1,
+	)
+	srv.SignalHooks[endless.POST_SIGNAL][syscall.SIGUSR1] = append(
+		srv.SignalHooks[endless.POST_SIGNAL][syscall.SIGUSR1],
+		postSigUsr1,
+	)
+
+	log.Fatal(srv.ListenAndServe())
 
 }
 
