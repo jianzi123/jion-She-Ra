@@ -3,13 +3,11 @@ package jobs
 import (
 	"database/sql"
 	"errors"
-	"fmt"
 	"github.com/emicklei/go-restful"
 	"github.com/haveatry/She-Ra/configdata"
 	"github.com/haveatry/She-Ra/lru"
 	. "github.com/haveatry/She-Ra/utils"
 	_ "github.com/mattn/go-sqlite3"
-	//"golang.org/x/net/websocket"
 	"log"
 	"net/http"
 	"os"
@@ -88,19 +86,21 @@ func NewJobManager() (*JobManager, error) {
 	} else {
 		jobManager := &JobManager{
 			JobCache:     cache,
-			SeqNo:        make(map[Key]int, 100),
-			ExecChan:     make(map[Key]chan int, 100),
-			KillExecChan: make(map[Key]chan int, 100),
-			WaitExec:     make(map[Key]*sync.WaitGroup, 100),
+			SeqNo:        make(map[Key]int, 10240),
+			ExecChan:     make(map[Key]chan int, 10240),
+			KillExecChan: make(map[Key]chan int, 10240),
+			WaitExec:     make(map[Key]*sync.WaitGroup, 10240),
 			db:           Database,
 			accessLock:   &sync.RWMutex{},
+		}
+		if err = jobManager.recoverSeqNo(); err != nil {
+			return nil, errors.New("failed to recover seqno from database")
 		}
 		return jobManager, nil
 	}
 }
 
 func jobExists(key Key, cache *lru.ARCCache) bool {
-
 	//check the job cache at first
 	if cache.Contains(key) {
 		return true
@@ -118,7 +118,7 @@ func (d *JobManager) createJob(request *restful.Request, response *restful.Respo
 	info("Enter createJob\n")
 	ns := request.PathParameter("namespace")
 	job := configdata.Job{}
-	waitGroup := new(sync.WaitGroup)
+	//waitGroup := new(sync.WaitGroup)
 	if err := request.ReadEntity(&job); err != nil {
 		response.AddHeader("Content-Type", "text/plain")
 		response.WriteErrorString(http.StatusInternalServerError, err.Error())
@@ -140,9 +140,9 @@ func (d *JobManager) createJob(request *restful.Request, response *restful.Respo
 
 	d.accessLock.Lock()
 	d.SeqNo[key] = 0
-	d.ExecChan[key] = make(chan int, 1)
-	d.KillExecChan[key] = make(chan int, 1)
-	d.WaitExec[key] = waitGroup
+	//d.ExecChan[key] = make(chan int, 1)
+	//d.KillExecChan[key] = make(chan int, 1)
+	//d.WaitExec[key] = waitGroup
 	d.accessLock.Unlock()
 
 	createWorkSpace := &JobCommand{
@@ -161,7 +161,7 @@ func (d *JobManager) createJob(request *restful.Request, response *restful.Respo
 	response.WriteHeaderAndEntity(http.StatusCreated, &job)
 }
 
-func (d *JobManager) findJob(request *restful.Request, response *restful.Response) {
+func (d *JobManager) readJob(request *restful.Request, response *restful.Response) {
 	var job configdata.Job
 	jobId := request.PathParameter("job-id")
 	ns := request.PathParameter("namespace")
@@ -180,6 +180,7 @@ func (d *JobManager) findJob(request *restful.Request, response *restful.Respons
 			info("failed to read job config data")
 			response.WriteHeader(http.StatusNotFound)
 		} else {
+			d.JobCache.Add(key, job)
 			response.WriteHeaderAndEntity(http.StatusFound, &job)
 		}
 	} else {
@@ -189,7 +190,7 @@ func (d *JobManager) findJob(request *restful.Request, response *restful.Respons
 	return
 }
 
-func (d *JobManager) findAllJobs(request *restful.Request, response *restful.Response) {
+func (d *JobManager) readAllJobs(request *restful.Request, response *restful.Response) {
 
 }
 
@@ -216,14 +217,14 @@ func (d *JobManager) updateJob(request *restful.Request, response *restful.Respo
 
 		response.WriteHeaderAndEntity(http.StatusAccepted, &newJob)
 	} else {
-		waitGroup := new(sync.WaitGroup)
+		//waitGroup := new(sync.WaitGroup)
 		d.JobCache.Add(key, newJob)
 
 		d.accessLock.Lock()
 		d.SeqNo[key] = 0
-		d.ExecChan[key] = make(chan int, 1)
-		d.KillExecChan[key] = make(chan int, 1)
-		d.WaitExec[key] = waitGroup
+		//d.ExecChan[key] = make(chan int, 1)
+		//d.KillExecChan[key] = make(chan int, 1)
+		//d.WaitExec[key] = waitGroup
 		d.accessLock.Unlock()
 
 		createWorkSpace := &JobCommand{
@@ -254,6 +255,9 @@ func (d *JobManager) delJob(request *restful.Request, response *restful.Response
 
 	//Need to kill runnig execution of this job
 	go func() {
+		if _, OK := <-d.KillExecChan[key]; OK == false {
+			d.KillExecChan[key] = make(chan int, 1)
+		}
 		d.KillExecChan[key] <- EXEC_KILL_ALL
 	}()
 
@@ -297,25 +301,55 @@ func (d *JobManager) execJob(request *restful.Request, response *restful.Respons
 	ns := request.PathParameter("namespace")
 	jobId := request.PathParameter("job-id")
 	key := Key{Ns: ns, Id: jobId}
+	job := configdata.Job{}
 
 	info("execJob: key.ns=%s, key.id=%s\n", key.Ns, key.Id)
-	if d.JobCache.Contains(key) {
+
+	if !d.JobCache.Contains(key) &&
+		FileExists(WS_PATH+key.Ns+"/"+key.Id+"/.shera/configfile") {
+		if err := ReadData(key, &job); err != nil {
+			info("failed to read job config data")
+			response.WriteHeader(http.StatusNotFound)
+		} else {
+			d.JobCache.Add(key, job)
+		}
+
+	}
+
+	if jobExists(key, d.JobCache) {
 		d.accessLock.Lock()
-		jobExec := &configdata.Execution{}
-		jobExec.Number = int32(d.SeqNo[key] + 1)
-		now := time.Now()
-		year, mon, day := now.Date()
-		hour, min, sec := now.Clock()
-		jobExec.LogFile = fmt.Sprintf("%03d-%d%02d%02d%02d%02d%02d", int(jobExec.Number), year, mon, day, hour, min, sec)
-		jobExec.Progress = configdata.Execution_INIT
-		jobExec.EndStatus = configdata.Execution_FAILURE
+		jobExec := &Execution{
+			Namespace: key.Ns,
+			JobId:     key.Id,
+			SeqNo:     int32(d.SeqNo[key] + 1),
+			Progress:  EXEC_INIT,
+			EndStatus: EXEC_FAILURE,
+			Finished:  EXEC_NOT_DONE,
+			Cancelled: EXEC_NOT_CANCELLED,
+			StartTime: time.Now().Unix(),
+			EndTime:   0,
+		}
+		//now := time.Now()
+		//year, mon, day := now.Date()
+		//hour, min, sec := now.Clock()
+		//jobExec.LogFile = fmt.Sprintf("%03d-%d%02d%02d%02d%02d%02d", int(jobExec.Number), year, mon, day, hour, min, sec)
 		response.WriteHeaderAndEntity(http.StatusCreated, jobExec)
 
 		d.SeqNo[key] = d.SeqNo[key] + 1
-		InsertExecutionRecord(key.Ns, key.Id, int(jobExec.Number), 0, 0, 0)
+		info("insertRecord: key.ns=%s, key.id=%s, jobExec.SeqNo=%d\n", key.Ns, key.Id, jobExec.SeqNo)
+		InsertExecutionRecord(jobExec)
 		info("Get the write lock successfully")
+		var OK bool
+		if _, OK = d.WaitExec[key]; !OK {
+			d.WaitExec[key] = new(sync.WaitGroup)
+		}
+
+		if _, OK = d.ExecChan[key]; !OK {
+			d.ExecChan[key] = make(chan int, 1)
+		}
+
 		d.WaitExec[key].Add(1)
-		go d.runJobExecution(key, int(jobExec.Number))
+		go d.runJobExecution(key, jobExec.SeqNo)
 		d.accessLock.Unlock()
 		return
 	} else {
@@ -325,22 +359,22 @@ func (d *JobManager) execJob(request *restful.Request, response *restful.Respons
 	}
 }
 
-func (d *JobManager) runJobExecution(key Key, seqno int) {
+func (d *JobManager) runJobExecution(key Key, seqno int32) {
 	var retCode int
-	info("key.Ns=%s, key.Id=%s, seqno=%d\n", key.Ns, key.Id, seqno)
 	d.ExecChan[key] <- EXEC_GOROUTINE
+	info("runJobExecution key.Ns=%s, key.Id=%s, seqno=%d\n", key.Ns, key.Id, seqno)
 	if value, OK := d.JobCache.Get(key); OK {
-		if cancelStat := GetCancelStatus(key.Ns, key.Id, seqno); cancelStat == 1 {
+		if cancelStat := GetCancelStatus(key.Ns, key.Id, seqno); cancelStat == EXEC_CANCELLED {
 			d.accessLock.Lock()
 			<-d.ExecChan[key]
 			d.WaitExec[key].Done()
 			d.accessLock.Unlock()
-			info("key.Ns=%s, key.Id=%s, seqno=%d cancelled\n", key.Ns, key.Id, seqno)
+			info("GetCancelStatus key.Ns=%s, key.Id=%s, seqno=%d cancelled\n", key.Ns, key.Id, seqno)
 			return
 		}
 
 		job := value.(configdata.Job)
-		progress := configdata.Execution_INIT
+		progress := EXEC_INIT
 		info("key.Ns=%s, key.Id=%s, seqno=%d begin to execute command", key.Ns, key.Id, seqno)
 
 		//change the working dir
@@ -366,7 +400,6 @@ func (d *JobManager) runJobExecution(key Key, seqno int) {
 			return
 		}
 
-		startTime := time.Now()
 		//select correct jdk version
 		switchJdkCmd := &JobCommand{
 			Name: "bash",
@@ -377,7 +410,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int) {
 			switchJdkCmd.Args = []string{"-c", "echo 2 | alternatives --config java"}
 		}
 
-		if retCode = switchJdkCmd.ExecAsync(d, key, startTime, seqno, configdata.Execution_INIT); retCode != EXEC_FINISHED {
+		if retCode = switchJdkCmd.ExecAsync(d, key, seqno, EXEC_INIT); retCode != EXEC_FINISHED {
 			d.accessLock.Lock()
 			<-d.ExecChan[key]
 			d.WaitExec[key].Done()
@@ -388,12 +421,12 @@ func (d *JobManager) runJobExecution(key Key, seqno int) {
 		//pull code from git
 		if codeManager := job.GetCodeManager(); codeManager != nil && codeManager.GitConfig != nil {
 			info("key.Ns=%s, key.Id=%s, seqno=%d begin to pulling code\n", key.Ns, key.Id, seqno)
-			progress = configdata.Execution_CODE_PULLING
+			progress = EXEC_CODE_PULLING
 			gitInitCmd := &JobCommand{
 				Name: "git",
 				Args: []string{"init"},
 			}
-			if retCode = gitInitCmd.ExecAsync(d, key, startTime, seqno, progress); retCode != EXEC_FINISHED {
+			if retCode = gitInitCmd.ExecAsync(d, key, seqno, progress); retCode != EXEC_FINISHED {
 				d.accessLock.Lock()
 				<-d.ExecChan[key]
 				d.WaitExec[key].Done()
@@ -405,7 +438,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int) {
 				Name: "git",
 				Args: []string{"config", "remote.origin.url", codeManager.GitConfig.Repo.Url},
 			}
-			if retCode = gitConfigCmd.ExecAsync(d, key, startTime, seqno, progress); retCode != EXEC_FINISHED {
+			if retCode = gitConfigCmd.ExecAsync(d, key, seqno, progress); retCode != EXEC_FINISHED {
 				d.accessLock.Lock()
 				<-d.ExecChan[key]
 				d.WaitExec[key].Done()
@@ -417,7 +450,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int) {
 				Name: "git",
 				Args: []string{"pull", "origin", codeManager.GitConfig.Branch},
 			}
-			if retCode = gitPullCmd.ExecAsync(d, key, startTime, seqno, progress); retCode != EXEC_FINISHED {
+			if retCode = gitPullCmd.ExecAsync(d, key, seqno, progress); retCode != EXEC_FINISHED {
 				d.accessLock.Lock()
 				<-d.ExecChan[key]
 				d.WaitExec[key].Done()
@@ -427,13 +460,13 @@ func (d *JobManager) runJobExecution(key Key, seqno int) {
 		}
 
 		if buildManager := job.GetBuildManager(); buildManager != nil {
-			progress = configdata.Execution_CODE_BUILDING
+			progress = EXEC_CODE_BUILDING
 			if buildManager.AntConfig != nil {
 				antBuildCmd := &JobCommand{
 					Name: "ant",
 					Args: []string{"-f", buildManager.AntConfig.BuildFile, "-D" + buildManager.AntConfig.Properties},
 				}
-				if retCode = antBuildCmd.ExecAsync(d, key, startTime, seqno, progress); retCode != EXEC_FINISHED {
+				if retCode = antBuildCmd.ExecAsync(d, key, seqno, progress); retCode != EXEC_FINISHED {
 					d.accessLock.Lock()
 					<-d.ExecChan[key]
 					d.WaitExec[key].Done()
@@ -448,7 +481,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int) {
 					Args: []string{"-f", buildManager.MvnConfig.Pom, buildManager.MvnConfig.Goals},
 				}
 
-				if retCode = mvnBuildCmd.ExecAsync(d, key, startTime, seqno, progress); retCode != EXEC_FINISHED {
+				if retCode = mvnBuildCmd.ExecAsync(d, key, seqno, progress); retCode != EXEC_FINISHED {
 					d.accessLock.Lock()
 					<-d.ExecChan[key]
 					d.WaitExec[key].Done()
@@ -459,13 +492,13 @@ func (d *JobManager) runJobExecution(key Key, seqno int) {
 		}
 
 		if job.BuildImgCmd != "" {
-			progress = configdata.Execution_IMAGE_BUILDING
+			progress = EXEC_IMAGE_BUILDING
 			cmdWithArgs := strings.Split(job.BuildImgCmd, " ")
 			imgBuildCmd := &JobCommand{
 				Name: cmdWithArgs[0],
 				Args: cmdWithArgs[1:],
 			}
-			if retCode = imgBuildCmd.ExecAsync(d, key, startTime, seqno, progress); retCode != EXEC_FINISHED {
+			if retCode = imgBuildCmd.ExecAsync(d, key, seqno, progress); retCode != EXEC_FINISHED {
 				d.accessLock.Lock()
 				<-d.ExecChan[key]
 				d.WaitExec[key].Done()
@@ -475,13 +508,13 @@ func (d *JobManager) runJobExecution(key Key, seqno int) {
 		}
 
 		if job.PushImgCmd != "" {
-			progress = configdata.Execution_IMAGE_PUSHING
+			progress = EXEC_IMAGE_PUSHING
 			cmdWithArgs := strings.Split(job.PushImgCmd, " ")
 			imgPushCmd := &JobCommand{
 				Name: cmdWithArgs[0],
 				Args: cmdWithArgs[1:],
 			}
-			if retCode = imgPushCmd.ExecAsync(d, key, startTime, seqno, progress); retCode != EXEC_FINISHED {
+			if retCode = imgPushCmd.ExecAsync(d, key, seqno, progress); retCode != EXEC_FINISHED {
 				d.accessLock.Lock()
 				<-d.ExecChan[key]
 				d.WaitExec[key].Done()
@@ -489,8 +522,18 @@ func (d *JobManager) runJobExecution(key Key, seqno int) {
 				return
 			}
 		}
-		duration := time.Now().Sub(startTime).Seconds()
-		UpdateExecutionRecord(key.Ns, key.Id, seqno, int(duration), int(progress), int(configdata.Execution_SUCCESS), 1)
+		jobExec := &Execution{
+			Namespace: key.Ns,
+			JobId:     key.Id,
+			SeqNo:     seqno,
+			Progress:  progress,
+			EndStatus: EXEC_SUCCESS,
+			Finished:  EXEC_DONE,
+			Cancelled: EXEC_NOT_CANCELLED,
+			StartTime: 0,
+			EndTime:   time.Now().Unix(),
+		}
+		UpdateExecutionRecord(jobExec)
 		d.accessLock.Lock()
 		<-d.ExecChan[key]
 		d.WaitExec[key].Done()
@@ -532,6 +575,9 @@ func (d *JobManager) killJobExecution(request *restful.Request, response *restfu
 		//update the execution as cancelled in the database
 		SetExecutionCancelled(key.Ns, key.Id, seqno)
 		go func() {
+			if _, OK := <-d.KillExecChan[key]; OK == false {
+				d.KillExecChan[key] = make(chan int, 1)
+			}
 			d.KillExecChan[key] <- seqno
 		}()
 
@@ -540,7 +586,7 @@ func (d *JobManager) killJobExecution(request *restful.Request, response *restfu
 	}
 }
 
-func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, startTime time.Time, number int, progress configdata.Execution_State) int {
+func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) int {
 
 	var recvCode int
 	jobCmd := exec.Command(cmd.Name, cmd.Args...)
@@ -548,8 +594,18 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, startTime time.Time, nu
 	err := jobCmd.Start()
 	if err != nil {
 		info("err occurred when start executing command: (cmd=%s, agrs=%v): \\n%v\\n", cmd.Name, cmd.Args)
-		duration := time.Now().Sub(startTime).Seconds()
-		UpdateExecutionRecord(key.Ns, key.Id, int(number), int(duration), int(progress), int(configdata.Execution_FAILURE), 1)
+		jobExec := &Execution{
+			Namespace: key.Ns,
+			JobId:     key.Id,
+			SeqNo:     seqno,
+			Progress:  progress,
+			EndStatus: EXEC_FAILURE,
+			Finished:  EXEC_DONE,
+			Cancelled: EXEC_NOT_CANCELLED,
+			StartTime: 0,
+			EndTime:   time.Now().Unix(),
+		}
+		UpdateExecutionRecord(jobExec)
 		return EXEC_ERROR
 	}
 
@@ -561,16 +617,27 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, startTime time.Time, nu
 	for {
 		select {
 		case recvCode = <-d.KillExecChan[key]:
-			info("received kill execution command %d, seqno:%d\n", recvCode, number)
-			if recvCode == number || recvCode == EXEC_KILL_ALL {
+			info("received kill execution command %d, seqno:%d\n", recvCode, seqno)
+			close(d.KillExecChan[key])
+			if recvCode == int(seqno) || recvCode == EXEC_KILL_ALL {
 				info("begin to kill the execution command\n")
 				pgid, err := syscall.Getpgid(jobCmd.Process.Pid)
 				if err == nil {
 					syscall.Kill(-pgid, syscall.SIGTERM)
 				}
 				info("kill the execution command successfully\n")
-				duration := time.Now().Sub(startTime).Seconds()
-				UpdateExecutionRecord(key.Ns, key.Id, int(number), int(duration), int(progress), int(configdata.Execution_FAILURE), 1)
+				jobExec := &Execution{
+					Namespace: key.Ns,
+					JobId:     key.Id,
+					SeqNo:     seqno,
+					Progress:  progress,
+					EndStatus: EXEC_FAILURE,
+					Finished:  EXEC_DONE,
+					Cancelled: EXEC_CANCELLED,
+					StartTime: 0,
+					EndTime:   time.Now().Unix(),
+				}
+				UpdateExecutionRecord(jobExec)
 				return recvCode
 			}
 			break
@@ -578,14 +645,44 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, startTime time.Time, nu
 		case err = <-done:
 			if err != nil {
 				info("process done with error = %v\n", err)
-				duration := time.Now().Sub(startTime).Seconds()
-				UpdateExecutionRecord(key.Ns, key.Id, int(number), int(duration), int(progress), int(configdata.Execution_FAILURE), 1)
+				jobExec := &Execution{
+					Namespace: key.Ns,
+					JobId:     key.Id,
+					SeqNo:     seqno,
+					Progress:  progress,
+					EndStatus: EXEC_FAILURE,
+					Finished:  EXEC_DONE,
+					Cancelled: EXEC_NOT_CANCELLED,
+					StartTime: 0,
+					EndTime:   time.Now().Unix(),
+				}
+				UpdateExecutionRecord(jobExec)
 				return EXEC_ERROR
 			} else {
 				return EXEC_FINISHED
 			}
 
 		}
+	}
+}
+
+func (d *JobManager) recoverSeqNo() error {
+	rows, err := Database.Query("SELECT namespace, jobId, max(seqno) FROM job group by namespace, jobId")
+	if err != nil {
+		return err
+	} else {
+		for rows.Next() {
+			var key Key
+			var seqno int32
+			err = rows.Scan(&key.Ns, &key.Id, &seqno)
+			if err != nil {
+				return err
+			}
+			d.accessLock.Lock()
+			d.SeqNo[key] = int(seqno)
+			d.accessLock.Unlock()
+		}
+		return nil
 	}
 }
 

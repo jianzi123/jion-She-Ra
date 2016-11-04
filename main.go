@@ -10,6 +10,7 @@ import (
 	"github.com/magiconair/properties"
 	"log"
 	"net/http"
+	"os"
 	"path/filepath"
 	"syscall"
 )
@@ -51,9 +52,18 @@ func main() {
 	// Swagger configuration
 	SwaggerPath = props.GetString("swagger.path", "")
 	SheRaIcon = filepath.Join(SwaggerPath, "images/jion.ico")
+	logFileName := props.MustGet("log.path")
+	logFile, logErr := os.OpenFile(logFileName, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0666)
+	if logErr != nil {
+		log.Println("Fail to find", *logFile, "She-Ra start failed")
+		os.Exit(1)
+
+	}
+	log.SetOutput(logFile)
+	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 
 	// init database
-	utils.Init()
+	utils.Init(props)
 
 	// New Job Manager
 	if jobMng, err = jobs.NewJobManager(); err != nil {

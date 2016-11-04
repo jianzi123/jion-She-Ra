@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"github.com/golang/protobuf/proto"
 	"github.com/haveatry/She-Ra/configdata"
+	"github.com/magiconair/properties"
 	_ "github.com/mattn/go-sqlite3"
 	"io/ioutil"
 	"log"
@@ -13,7 +14,6 @@ import (
 )
 
 const (
-	WS_PATH           = "/workspace/"
 	EXECUTION_PATH    = "executions/"
 	MAX_EXEC_NUM      = 100
 	MAX_KEEP_DAYS     = 3
@@ -25,46 +25,84 @@ const (
 )
 
 var Database *sql.DB
+var WS_PATH string
 
 type Key struct {
 	Ns string
 	Id string
 }
 
-func Init() {
+type Execution struct {
+	Namespace string
+	JobId     string
+	SeqNo     int32
+	Progress  int32
+	EndStatus int32
+	Finished  int32
+	Cancelled int32
+	StartTime int64
+	EndTime   int64
+}
+
+const (
+	EXEC_INIT           int32 = 0
+	EXEC_CODE_PULLING   int32 = 1
+	EXEC_CODE_BUILDING  int32 = 2
+	EXEC_IMAGE_BUILDING int32 = 3
+	EXEC_IMAGE_PUSHING  int32 = 4
+)
+
+const (
+	EXEC_SUCCESS int32 = 0
+	EXEC_FAILURE int32 = 1
+)
+
+const (
+	EXEC_NOT_DONE int32 = 0
+	EXEC_DONE     int32 = 1
+)
+
+const (
+	EXEC_NOT_CANCELLED int32 = 0
+	EXEC_CANCELLED     int32 = 1
+)
+
+func Init(props *properties.Properties) {
 	//create database for She-Ra project
 	var err error
-	if Database, err = sql.Open("sqlite3", "/workspace/She-Ra.db"); err != nil {
+	WS_PATH = props.MustGet("working.path")
+	dbPath := props.MustGet("database.path")
+	if Database, err = sql.Open("sqlite3", dbPath); err != nil {
 		info("failed to setup database")
 	}
 
 	//create table job to store execution information
-	sql := `Create table IF NOT EXISTS job(namespace string(100), jobId string(100),number int,duration int,progress int,status int, finished int, cancelled int)`
+	sql := `Create table IF NOT EXISTS job(namespace CHAR(100) NOT NULL, jobId CHAR(100) NOT NULL,seqno integer NOT NULL,progress integer,status integer, finished integer, cancelled integer, startTime integer, endTime integer, PRIMARY KEY(namespace, jobId, seqno))`
 	if _, err = Database.Exec(sql); err != nil {
 		info("failed to create table job")
 	}
 }
 
-func InsertExecutionRecord(namespace, jobId string, number, duration, progress, status int) {
-	if stmt, err := Database.Prepare("insert into job(namespace, jobId, number, duration, progress, status,finished, cancelled) values (?,?,?,?,?,?,?,?)"); err != nil {
+func InsertExecutionRecord(e *Execution) {
+	if stmt, err := Database.Prepare("insert into job(namespace, jobId, seqno, progress, status,finished, cancelled, startTime, endTime) values (?,?,?,?,?,?,?,?,?)"); err != nil {
 		log.Fatalf("[She-Ra][error] failed to prepare insert sql:%v\n", err)
-	} else if _, err := stmt.Exec(namespace, jobId, number, duration, progress, status, 0, 0); err != nil {
+	} else if _, err := stmt.Exec(e.Namespace, e.JobId, e.SeqNo, e.Progress, e.EndStatus, e.Finished, e.Cancelled, e.StartTime, e.EndTime); err != nil {
 		log.Fatalf("[She-Ra][error] failed to insert data into database:%v\n", err)
 	}
 }
 
-func UpdateExecutionRecord(namespace, jobId string, number, duration, progress, status, finished int) {
-	if stmt, err := Database.Prepare("update job set duration=?, progress=?, status=?, finished=? where namespace=? and jobId=? and number=?"); err != nil {
+func UpdateExecutionRecord(e *Execution) {
+	if stmt, err := Database.Prepare("update job set progress=?, status=?, finished=?, cancelled=?, endTime=? where namespace=? and jobId=? and seqno=?"); err != nil {
 		log.Fatalf("[She-Ra][error] failed to prepare update sql:%v\n", err)
-	} else if _, err := stmt.Exec(duration, progress, status, finished, namespace, jobId, number); err != nil {
+	} else if _, err := stmt.Exec(e.Progress, e.EndStatus, e.Finished, e.Cancelled, e.EndTime, e.Namespace, e.JobId, e.SeqNo); err != nil {
 		log.Fatalf("[She-Ra][error] failed to update data in database:%v\n", err)
 	}
 }
 
-func SetExecutionCancelled(namespace, jobId string, number int) {
-	if stmt, err := Database.Prepare("update job set cancelled=1 where namespace=? and jobId=? and number=?"); err != nil {
+func SetExecutionCancelled(namespace, jobId string, seqno int) {
+	if stmt, err := Database.Prepare("update job set cancelled=1 where namespace=? and jobId=? and seqno=?"); err != nil {
 		log.Fatalf("[She-Ra][error] failed to prepare update sql:%v\n", err)
-	} else if _, err := stmt.Exec(namespace, jobId, number); err != nil {
+	} else if _, err := stmt.Exec(namespace, jobId, seqno); err != nil {
 		log.Fatalf("[She-Ra][error] failed to set execution cancelled in database:%v\n", err)
 	}
 }
@@ -77,20 +115,20 @@ func SetAllCancelled(namespace, jobId string) {
 	}
 }
 
-func GetCancelStatus(namespace, jobId string, number int) int {
-	var cancelStat int
-	if stmt, err := Database.Prepare("select cancelled from job where namespace=? and jobId=? and number=?"); err != nil {
+func GetCancelStatus(namespace, jobId string, seqno int32) int32 {
+	var cancelStat int32
+	if stmt, err := Database.Prepare("select cancelled from job where namespace=? and jobId=? and seqno=?"); err != nil {
 		log.Fatalf("[She-Ra][error] failed to prepare update sql:%v\n", err)
-	} else if err := stmt.QueryRow(namespace, jobId, number).Scan(&cancelStat); err != nil {
+	} else if err := stmt.QueryRow(namespace, jobId, seqno).Scan(&cancelStat); err != nil {
 		log.Fatalf("[She-Ra][error] failed to get cancel stat in database:%v\n", err)
 	}
 	return cancelStat
 }
 
-func DeleteExecutionRecord(namespace, jobId string, number int) {
-	if stmt, err := Database.Prepare("delete from job where namespace=? and jobId=? and number=?"); err != nil {
+func DeleteExecutionRecord(namespace, jobId string, seqno int32) {
+	if stmt, err := Database.Prepare("delete from job where namespace=? and jobId=? and seqno=?"); err != nil {
 		log.Fatalf("[She-Ra][error] failed to prepare delete sql:%v\n", err)
-	} else if _, err := stmt.Exec(namespace, jobId, number); err != nil {
+	} else if _, err := stmt.Exec(namespace, jobId, seqno); err != nil {
 		log.Fatalf("[She-Ra][error] failed to delete job execution in database:%v\n", err)
 	}
 }

@@ -68,24 +68,3 @@ message Maven {
 	string settingFile = 6;
 	string globalSettingFile = 7;
 }
-
-message Execution {
-	string job = 1;
-	int32  number = 2;
-	string logFile = 3;
-	enum State {
-		INIT = 0;
-		CODE_PULLING = 1;
-		CODE_BUILDING = 2;
-		IMAGE_BUILDING = 3;
-		IMAGE_PUSHING = 4;
-	}
-	State progress = 4;
-	enum Status {
-		SUCCESS = 0;
-		FAILURE = 1;
-		CANCELLED = 2;
-		IGNORED = 3;
-	}
-	Status endStatus = 5;
-}

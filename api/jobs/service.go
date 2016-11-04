@@ -4,6 +4,7 @@ import (
 	"github.com/emicklei/go-restful"
 	//. "github.com/haveatry/She-Ra/api/response"
 	. "github.com/haveatry/She-Ra/configdata"
+	. "github.com/haveatry/She-Ra/utils"
 )
 
 func WebService(jobMng *JobManager) *restful.WebService {
@@ -35,18 +36,18 @@ func (d JobManager) WebService() *restful.WebService {
 	ws.Consumes(restful.MIME_XML, restful.MIME_JSON).
 		Produces(restful.MIME_JSON, restful.MIME_XML)
 
-	ws.Route(ws.GET("/jobs/{namespace}/{job-id}").To(d.findJob).
+	ws.Route(ws.GET("/jobs/{namespace}/{job-id}").To(d.readJob).
 		// docs
 		Doc("get a job config").
-		Operation("findJob").
+		Operation("readJob").
 		Param(ws.PathParameter("namespace", "identifier of the namespace").DataType("string")).
 		Param(ws.PathParameter("job-id", "identifier of the job").DataType("string")).
 		Writes(Job{})) // on the response
 
-	ws.Route(ws.GET("/jobs").To(d.findAllJobs).
+	ws.Route(ws.GET("/jobs").To(d.readAllJobs).
 		// docs
 		Doc("get job list").
-		Operation("findAllJobs").
+		Operation("readAllJobs").
 		Param(ws.PathParameter("job-id", "identifier of the job").DataType("string")).
 		Writes([]Job{})) // on the response
 
