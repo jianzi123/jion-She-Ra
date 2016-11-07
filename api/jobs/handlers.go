@@ -579,7 +579,8 @@ func (d *JobManager) getAllJobExecutions(request *restful.Request, response *res
 	jobId := request.PathParameter("job-id")
 	Info("namespace: %s jobId:%s", namespace, jobId)
 
-	jobExecView := make([]ExecView, 0, 20)
+	var jobExecView []ExecView
+	//jobExecView := make([]ExecView, 0, 20)
 	Info("before jobExecView.len()=%d", len(jobExecView))
 	err := GetJobExecRecords(namespace, jobId, &jobExecView)
 	if err != nil {
