@@ -48,11 +48,11 @@ func (cmd *JobCommand) Exec() bool {
 	)
 
 	if cmdOut, err = exec.Command(cmd.Name, cmd.Args...).Output(); err != nil {
-		info("Failed to execute command: (cmd=%s, agrs=%v): \\n%v\\n", cmd.Name, cmd.Args)
+		Info("Failed to execute command: (cmd=%s, agrs=%v): \\n%v\\n", cmd.Name, cmd.Args)
 		return false
 	}
 
-	info("Output (cmd=%s, agrs=%v): \\n%v\\n", cmd.Name, cmd.Args, string(cmdOut))
+	Info("Output (cmd=%s, agrs=%v): \\n%v\\n", cmd.Name, cmd.Args, string(cmdOut))
 	return true
 }
 
@@ -62,22 +62,22 @@ func (cmd *JobCommand) ExecPipeCmd(in *JobCommand) int {
 	producer := exec.Command(in.Name, in.Args...)
 	consumer := exec.Command(cmd.Name, cmd.Args...)
 	if consumer.Stdin, err = producer.StdoutPipe(); err != nil {
-		info("Failed to combine the 2 commands with pipe\n")
+		Info("Failed to combine the 2 commands with pipe\n")
 		return EXEC_ERROR
 	}
 
 	if err = consumer.Start(); err != nil {
-		info("err occurred when start executing command: (cmd=%s, agrs=%v): \\n%v\\n", cmd.Name, cmd.Args)
+		Info("err occurred when start executing command: (cmd=%s, agrs=%v): \\n%v\\n", cmd.Name, cmd.Args)
 		return EXEC_ERROR
 	}
 
 	if err = producer.Run(); err != nil {
-		info("err occurred when executing command: (cmd=%s, agrs=%v): \\n%v\\n", in.Name, in.Args)
+		Info("err occurred when executing command: (cmd=%s, agrs=%v): \\n%v\\n", in.Name, in.Args)
 		return EXEC_ERROR
 	}
 
 	if err = consumer.Wait(); err != nil {
-		info("err occurred when waiting the command executing complete: (cmd=%s, agrs=%v): \\n%v\\n", cmd.Name, cmd.Args)
+		Info("err occurred when waiting the command executing complete: (cmd=%s, agrs=%v): \\n%v\\n", cmd.Name, cmd.Args)
 		return EXEC_ERROR
 	}
 
@@ -120,7 +120,7 @@ func jobExists(key Key, cache *lru.ARCCache) bool {
 }
 
 func (d *JobManager) createJob(request *restful.Request, response *restful.Response) {
-	info("Enter createJob\n")
+	Info("Enter createJob\n")
 	ns := request.PathParameter("namespace")
 	job := configdata.Job{}
 	//waitGroup := new(sync.WaitGroup)
@@ -171,25 +171,25 @@ func (d *JobManager) readJob(request *restful.Request, response *restful.Respons
 	jobId := request.PathParameter("job-id")
 	ns := request.PathParameter("namespace")
 	key := Key{Ns: ns, Id: jobId}
-	info("namespace is %s, job.Id: %s\n", ns, jobId)
+	Info("namespace is %s, job.Id: %s\n", ns, jobId)
 
 	if !jobExists(key, d.JobCache) {
-		info("failed to find the job %s\n", jobId)
+		Info("failed to find the job %s\n", jobId)
 		response.WriteHeader(http.StatusNotFound)
 	} else if value, OK := d.JobCache.Get(key); OK {
 		job = value.(configdata.Job)
-		info("Get job successfully")
+		Info("Get job successfully")
 		response.WriteHeaderAndEntity(http.StatusFound, &job)
 	} else if FileExists(WS_PATH + key.Ns + "/" + key.Id + "/.shera/configfile") {
 		if err := ReadData(key, &job); err != nil {
-			info("failed to read job config data")
+			Info("failed to read job config data")
 			response.WriteHeader(http.StatusNotFound)
 		} else {
 			d.JobCache.Add(key, job)
 			response.WriteHeaderAndEntity(http.StatusFound, &job)
 		}
 	} else {
-		info("failed to find the job %s\n", jobId)
+		Info("failed to find the job %s\n", jobId)
 		response.WriteHeader(http.StatusNotFound)
 	}
 	return
@@ -290,7 +290,7 @@ func (d *JobManager) delJob(request *restful.Request, response *restful.Response
 	d.JobCache.Remove(key)
 
 	d.accessLock.Lock()
-	info("delJob:get access lock successfully")
+	Info("delJob:get access lock successfully")
 	close(d.KillExecChan[key])
 	close(d.ExecChan[key])
 	delete(d.SeqNo, key)
@@ -308,12 +308,12 @@ func (d *JobManager) execJob(request *restful.Request, response *restful.Respons
 	key := Key{Ns: ns, Id: jobId}
 	job := configdata.Job{}
 
-	info("execJob: key.ns=%s, key.id=%s\n", key.Ns, key.Id)
+	Info("execJob: key.ns=%s, key.id=%s\n", key.Ns, key.Id)
 
 	if !d.JobCache.Contains(key) &&
 		FileExists(WS_PATH+key.Ns+"/"+key.Id+"/.shera/configfile") {
 		if err := ReadData(key, &job); err != nil {
-			info("failed to read job config data")
+			Info("failed to read job config data")
 			response.WriteHeader(http.StatusNotFound)
 		} else {
 			d.JobCache.Add(key, job)
@@ -341,9 +341,9 @@ func (d *JobManager) execJob(request *restful.Request, response *restful.Respons
 		response.WriteHeaderAndEntity(http.StatusCreated, jobExec)
 
 		d.SeqNo[key] = d.SeqNo[key] + 1
-		info("insertRecord: key.ns=%s, key.id=%s, jobExec.SeqNo=%d\n", key.Ns, key.Id, jobExec.SeqNo)
+		Info("insertRecord: key.ns=%s, key.id=%s, jobExec.SeqNo=%d\n", key.Ns, key.Id, jobExec.SeqNo)
 		InsertExecutionRecord(jobExec)
-		info("Get the write lock successfully")
+		Info("Get the write lock successfully")
 		var OK bool
 		if _, OK = d.WaitExec[key]; !OK {
 			d.WaitExec[key] = new(sync.WaitGroup)
@@ -367,20 +367,20 @@ func (d *JobManager) execJob(request *restful.Request, response *restful.Respons
 func (d *JobManager) runJobExecution(key Key, seqno int32) {
 	var retCode int
 	d.ExecChan[key] <- EXEC_GOROUTINE
-	info("runJobExecution key.Ns=%s, key.Id=%s, seqno=%d\n", key.Ns, key.Id, seqno)
+	Info("runJobExecution key.Ns=%s, key.Id=%s, seqno=%d\n", key.Ns, key.Id, seqno)
 	if value, OK := d.JobCache.Get(key); OK {
 		if cancelStat := GetCancelStatus(key.Ns, key.Id, seqno); cancelStat == EXEC_CANCELLED {
 			d.accessLock.Lock()
 			<-d.ExecChan[key]
 			d.WaitExec[key].Done()
 			d.accessLock.Unlock()
-			info("GetCancelStatus key.Ns=%s, key.Id=%s, seqno=%d cancelled\n", key.Ns, key.Id, seqno)
+			Info("GetCancelStatus key.Ns=%s, key.Id=%s, seqno=%d cancelled\n", key.Ns, key.Id, seqno)
 			return
 		}
 
 		job := value.(configdata.Job)
 		progress := EXEC_INIT
-		info("key.Ns=%s, key.Id=%s, seqno=%d begin to execute command", key.Ns, key.Id, seqno)
+		Info("key.Ns=%s, key.Id=%s, seqno=%d begin to execute command", key.Ns, key.Id, seqno)
 
 		//change the working dir
 		targetPath, err := filepath.Abs(WS_PATH + key.Ns + "/" + key.Id)
@@ -394,14 +394,14 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 			return
 		}
 
-		info("Target Path: %s\\n", targetPath)
+		Info("Target Path: %s\\n", targetPath)
 		err = os.Chdir(targetPath)
 		if err != nil {
 			d.accessLock.Lock()
 			<-d.ExecChan[key]
 			d.WaitExec[key].Done()
 			d.accessLock.Unlock()
-			info("ChdirError (%s): %s\\n", targetPath, err)
+			Info("ChdirError (%s): %s\\n", targetPath, err)
 			return
 		}
 
@@ -426,7 +426,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 		lId := strconv.Itoa(int(seqno))
 		//pull code from git
 		if codeManager := job.GetCodeManager(); codeManager != nil && codeManager.GitConfig != nil {
-			info("key.Ns=%s, key.Id=%s, seqno=%d begin to pulling code\n", key.Ns, key.Id, seqno)
+			Info("key.Ns=%s, key.Id=%s, seqno=%d begin to pulling code\n", key.Ns, key.Id, seqno)
 			progress = EXEC_CODE_PULLING
 			gitInitCmd := &JobCommand{
 				Name: "git",
@@ -557,7 +557,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 		d.WaitExec[key].Done()
 		d.accessLock.Unlock()
 		if err := os.Chmod(fPath+lId, 0777); err != nil {
-			info("job finished normally, when changing mode %v\n", err)
+			Info("job finished normally, when changing mode %v\n", err)
 		}
 
 	}
@@ -577,10 +577,10 @@ func (d *JobManager) openJobExecution(request *restful.Request, response *restfu
 func (d *JobManager) getAllJobExecutions(request *restful.Request, response *restful.Response) {
 	namespace := request.PathParameter("namespace")
 	jobId := request.PathParameter("job-id")
-	info("namespace: %s jobId:%s", namespace, jobId)
+	Info("namespace: %s jobId:%s", namespace, jobId)
 
 	jobExecView := make([]ExecView, 0, 20)
-	info("before jobExecView.len()=%d", len(jobExecView))
+	Info("before jobExecView.len()=%d", len(jobExecView))
 	err := GetJobExecRecords(namespace, jobId, &jobExecView)
 	if err != nil {
 		response.AddHeader("Content-Type", "text/plain")
@@ -589,7 +589,7 @@ func (d *JobManager) getAllJobExecutions(request *restful.Request, response *res
 
 	}
 
-	info("after jobExecView.len()=%d", len(jobExecView))
+	Info("after jobExecView.len()=%d", len(jobExecView))
 	response.WriteHeaderAndEntity(http.StatusCreated, jobExecView)
 }
 
@@ -667,14 +667,14 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) 
 
 	errout, err := jobCmd.StderrPipe()
 	if err != nil {
-		info("get stderr failed:%v\n", err)
+		Info("get stderr failed:%v\n", err)
 		return EXEC_ERROR
 	}
 
 	jobCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	err = jobCmd.Start()
 	if err != nil {
-		info("err occurred when start executing command: (cmd=%s, agrs=%v): \\n%v\\n", cmd.Name, cmd.Args)
+		Info("err occurred when start executing command: (cmd=%s, agrs=%v): \\n%v\\n", cmd.Name, cmd.Args)
 		jobExec := &Execution{
 			Namespace: key.Ns,
 			JobId:     key.Id,
@@ -691,7 +691,7 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) 
 		fline := fmt.Sprintf("\nFailed in %d. \n", progress)
 		WriteFile(fPath, lId, fline)
 		if err := os.Chmod(fPath+lId, 0777); err != nil {
-			info("when changing mode, %v\n", err)
+			Info("when changing mode, %v\n", err)
 		}
 
 		UpdateExecutionRecord(jobExec)
@@ -703,13 +703,13 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) 
 
 		fPath := fmt.Sprintf("/workspace/%s/%s/.shera/executions/", key.Ns, key.Id)
 		lId := strconv.Itoa(number)
-		//info("waiting for command to finish.")
+		//Info("waiting for command to finish.")
 		reader := bufio.NewReader(stdout)
 		erreader := bufio.NewReader(errout)
 		for {
 			line, err := reader.ReadString('\n')
 			if err != nil || io.EOF == err {
-				//info("exec cmd finished. %v\n", err)
+				//Info("exec cmd finished. %v\n", err)
 				break
 			}
 			WriteFile(fPath, lId, line)
@@ -717,7 +717,7 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) 
 		for {
 			line, err := erreader.ReadString('\n')
 			if err != nil || io.EOF == err {
-				//info("get error out finished: %v\n", err)
+				//Info("get error out finished: %v\n", err)
 				break
 			}
 			WriteFile(fPath, lId, line)
@@ -728,15 +728,15 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) 
 	for {
 		select {
 		case recvCode = <-d.KillExecChan[key]:
-			info("received kill execution command %d, seqno:%d\n", recvCode, seqno)
+			Info("received kill execution command %d, seqno:%d\n", recvCode, seqno)
 			close(d.KillExecChan[key])
 			if recvCode == int(seqno) || recvCode == EXEC_KILL_ALL {
-				info("begin to kill the execution command\n")
+				Info("begin to kill the execution command\n")
 				pgid, err := syscall.Getpgid(jobCmd.Process.Pid)
 				if err == nil {
 					syscall.Kill(-pgid, syscall.SIGTERM)
 				}
-				info("kill the execution command successfully\n")
+				Info("kill the execution command successfully\n")
 				jobExec := &Execution{
 					Namespace: key.Ns,
 					JobId:     key.Id,
@@ -755,7 +755,7 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) 
 
 		case err = <-done:
 			if err != nil {
-				info("process done with error = %v\n", err)
+				Info("process done with error = %v\n", err)
 				jobExec := &Execution{
 					Namespace: key.Ns,
 					JobId:     key.Id,
@@ -773,7 +773,7 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) 
 				fline := fmt.Sprintf("\nFailed in %d. \n", progress)
 				WriteFile(fPath, lId, fline)
 				if err := os.Chmod(fPath+lId, 0777); err != nil {
-					info("when changing mode, %v\n", err)
+					Info("when changing mode, %v\n", err)
 				}
 
 				return EXEC_ERROR
@@ -815,7 +815,7 @@ func (d *JobManager) Log(ws *websocket.Conn) {
 		if err := websocket.JSON.Receive(ws, &data); err != nil {
 			if err.Error() == "EOF" {
 				if boolean == false {
-					info("log job not start and end.")
+					Info("log job not start and end.")
 					ws.Close()
 					break
 				}
@@ -825,7 +825,7 @@ func (d *JobManager) Log(ws *websocket.Conn) {
 		}
 		if data.Flag == true {
 			if boolean == true {
-				info("log already start")
+				Info("log already start")
 				continue
 			} else {
 				boolean = true
@@ -833,40 +833,40 @@ func (d *JobManager) Log(ws *websocket.Conn) {
 			fName := fmt.Sprintf("/workspace/%s/%s/.shera/executions/%s", data.NameSpace, data.JobId, data.SeqNo)
 			seqno, err := strconv.Atoi(data.SeqNo)
 			if err != nil {
-				info("----convent seqno to string failed: %v\n", err)
+				Info("----convent seqno to string failed: %v\n", err)
 				ws.Close()
 				return
 			}
 			key := Key{Ns: data.NameSpace, Id: data.JobId}
 			if v, ok := d.SeqNo[key]; ok != true {
-				info("job key not in jobMng")
+				Info("job key not in jobMng")
 				ws.Close()
 				return
 			} else if v < seqno {
-				info("job seqno is not used.")
+				Info("job seqno is not used.")
 				ws.Close()
 				return
 			}
 			if flag, err := GetFinishStatus(data.NameSpace, data.JobId, int32(seqno)); err != nil {
-				info("----get finish status failed: %v\n", err)
+				Info("----get finish status failed: %v\n", err)
 				ws.Close()
 				return
 			} else if flag == true {
 				buf, err := ioutil.ReadFile(fName)
 				if err = websocket.Message.Send(ws, string(buf)); err != nil {
-					info("send Message: %v\n", err)
+					Info("send Message: %v\n", err)
 				}
-				info("-----readFile all.\n")
+				Info("-----readFile all.\n")
 				ws.Close()
 				return
 			}
 			buf, err := ioutil.ReadFile(fName)
 			if err != nil {
-				info("before read data dynamicly, %v\n", err)
+				Info("before read data dynamicly, %v\n", err)
 				return
 			}
 			if err = websocket.Message.Send(ws, string(buf)); err != nil {
-				info("before read data dynamicly, read data from file %v\n ", err)
+				Info("before read data dynamicly, read data from file %v\n ", err)
 			}
 
 			go WatchFile(start, end, fName, ws)
@@ -899,14 +899,8 @@ func deleteJdk(request *restful.Request, response *restful.Response) {
 	jdkVersion := request.PathParameter("jdkVersion")
 
 	if err := DeleteJdk(jdkVersion); err != nil {
-		info("fail to delete jdk:%v", err)
+		Info("fail to delete jdk:%v", err)
 	}
 	response.WriteHeader(http.StatusAccepted)
 
-}
-
-// Log wrapper
-func info(template string, values ...interface{}) {
-	//log.Printf("[She-Ra][info] "+template+"\n", values...)
-	log.Output(2, fmt.Sprintf("[She-Ra][info] "+template+"\n", values...))
 }

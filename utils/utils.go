@@ -98,39 +98,39 @@ func Init(props *properties.Properties) {
 	WS_PATH = props.MustGet("working.path")
 	dbPath := props.MustGet("database.path")
 	if Database, err = sql.Open("sqlite3", dbPath); err != nil {
-		info("failed to setup database")
+		Info("failed to setup database")
 	}
 
 	//create table job to store execution information
 	sql := `Create table IF NOT EXISTS job(namespace CHAR(100) NOT NULL, jobId CHAR(100) NOT NULL,seqno integer NOT NULL,progress integer,status integer, finished integer, cancelled integer, startTime integer, endTime integer, PRIMARY KEY(namespace, jobId, seqno))`
 	if _, err = Database.Exec(sql); err != nil {
-		info("failed to create table job")
+		Info("failed to create table job")
 	}
 
 	//create table jdk to store execution information
 	sql = `create table if not exists jdk(version, installpath string, PRIMARY KEY(version))`
 	if _, err = Database.Exec(sql); err != nil {
-		info("failed to create table jdk")
+		Info("failed to create table jdk")
 	}
 }
 
 func InsertJdk(version, installPath string) {
 	if stmt, err := Database.Prepare("insert into jdk(version, installPath) values (?,?)"); err != nil {
-		info("failed to prepare insert sql:%v\n", err)
+		Info("failed to prepare insert sql:%v\n", err)
 
 	} else if _, err := stmt.Exec(version, installPath); err != nil {
-		info("failed to insert data into database:%v\n", err)
+		Info("failed to insert data into database:%v\n", err)
 	}
 
 }
 
 func DeleteJdk(version string) error {
 	if stmt, err := Database.Prepare("delete from jdk  where version = ?"); err != nil {
-		info("failed to prepare delete sql:%v\n", err)
+		Info("failed to prepare delete sql:%v\n", err)
 		return err
 
 	} else if _, err := stmt.Exec(version); err != nil {
-		info("failed to delete data from database:%v\n", err)
+		Info("failed to delete data from database:%v\n", err)
 		return err
 	}
 	return nil
@@ -140,11 +140,11 @@ func DeleteJdk(version string) error {
 func DelJobExecRecord(namespace, jobId string, seqno int) error {
 
 	if stmt, err := Database.Prepare("delete from job where namespace = ? and jobId = ? and seqno = ? and finished = ?"); err != nil {
-		info("failed to prepare delete sql:%v\n", err)
+		Info("failed to prepare delete sql:%v\n", err)
 		return err
 
 	} else if _, err := stmt.Exec(namespace, jobId, seqno, EXEC_DONE); err != nil {
-		info("failed to prepare delete sql:%v\n", err)
+		Info("failed to prepare delete sql:%v\n", err)
 		return err
 	}
 	return nil
@@ -156,7 +156,7 @@ func GetJobExecRecords(namespace, jobId string, jobExecView *[]ExecView) error {
 
 	rows, err := Database.Query("select seqno, status, endTime from job where namespace =? and jobId = ?", namespace, jobId)
 	if err != nil {
-		info("failed to prepare query sql:%v\n", err)
+		Info("failed to prepare query sql:%v\n", err)
 		return err
 	}
 	/*
@@ -272,7 +272,7 @@ func ReadData(key Key, job *configdata.Job) error {
 	data, err := ioutil.ReadFile(fileName)
 	if err != nil {
 		if os.IsNotExist(err) {
-			info("%s: File not found.  Creating new file.\n", fileName)
+			Info("%s: File not found.  Creating new file.\n", fileName)
 
 		} else {
 			log.Fatalln("[She-Ra][error]Error reading file:", err)
@@ -299,28 +299,28 @@ func WriteData(key Key, job *configdata.Job) error {
 		return err
 	}
 
-	info("proto marshal: job", string(data))
+	Info("proto marshal: job", string(data))
 	fileName := WS_PATH + key.Ns + "/" + key.Id + "/.shera/configfile"
 
 	if file, err = os.OpenFile(fileName, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0666); err != nil {
 		log.Fatalf("[She-Ra][error] failed to open file:%v\n", err)
 		return err
 	} else {
-		info("OpenFile ", fileName, " successfully.")
+		Info("OpenFile ", fileName, " successfully.")
 	}
 
 	if _, err = file.Write(data); err != nil {
-		info("write data ino file %s failed\n", fileName)
+		Info("write data ino file %s failed\n", fileName)
 		return err
 	} else {
-		info("write data into file succeed. file: ", fileName, "; data: ", string(data))
+		Info("write data into file succeed. file: ", fileName, "; data: ", string(data))
 	}
 
 	if err = file.Close(); err != nil {
-		info("file close failed: ", err)
+		Info("file close failed: ", err)
 		return err
 	} else {
-		info("file close succeed.")
+		Info("file close succeed.")
 	}
 	return err
 }
@@ -349,15 +349,15 @@ func getLocalPath() string {
 
 }
 
-func info(template string, values ...interface{}) {
-	log.Printf("[She-Ra][info] "+template+"\n", values...)
+func Info(template string, values ...interface{}) {
+	log.Output(2, fmt.Sprintf("[She-Ra][info] "+template+"\n", values...))
 }
 
 func ReadFile(fName string, nLen int) (int, string, error) {
 	var nSize int64 = int64(nLen)
 	file, err := os.Open(fName)
 	if err != nil {
-		info("1: %v\n", err)
+		Info("1: %v\n", err)
 		return 0, "", err
 	}
 	defer file.Close()
@@ -365,10 +365,10 @@ func ReadFile(fName string, nLen int) (int, string, error) {
 	len, err := file.ReadAt(buf, nSize)
 	fmt.Println("readFile nSize: ", nSize)
 	if err != nil && err.Error() != "EOF" {
-		info("2: %v\n", err)
+		Info("2: %v\n", err)
 		return 0, "", err
 	}
-	info("read data: %s; len: %d.", string(buf), len)
+	Info("read data: %s; len: %d.", string(buf), len)
 	return int(nSize) + len, string(buf), nil
 }
 
@@ -377,7 +377,7 @@ func ReadFileToEnd(fName string, nLen int) (int, string, error) {
 
 	var msg string
 	if err != nil {
-		info("1: %v\n", err)
+		Info("1: %v\n", err)
 		return 0, "", err
 	}
 	defer file.Close()
@@ -385,14 +385,14 @@ func ReadFileToEnd(fName string, nLen int) (int, string, error) {
 		buf := make([]byte, 1024)
 		len, err := file.ReadAt(buf, int64(nLen))
 		if err != nil && err != io.EOF {
-			info("2: %v\n", err)
+			Info("2: %v\n", err)
 			return 0, "", err
 		} else if err == io.EOF {
 			msg = msg + string(buf)
 			return nLen + len, msg + string(buf), nil
 		}
 		msg = msg + string(buf)
-		info("read data: %s, len: %d", string(buf), len)
+		Info("read data: %s, len: %d", string(buf), len)
 		nLen = nLen + len
 	}
 
@@ -405,7 +405,7 @@ func WriteFile(path string, name string, content string) (int, error) {
 	//fmt.Println(path + name)
 	f, err := os.OpenFile(path+name, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0660)
 	if err != nil {
-		info("Open file failed: %v\n", err)
+		Info("Open file failed: %v\n", err)
 		return 0, err
 	}
 	defer f.Close()
@@ -422,10 +422,10 @@ func checkFile(fName string) (bool, error) {
 		return false, err
 	}
 	if fInfo.Mode().String() == "-rwxrwxrwx" {
-		info("change mode succeed.")
+		Info("change mode succeed.")
 		return true, nil
 	} else {
-		info("change mode failed: %v\n", fInfo.Mode().String())
+		Info("change mode failed: %v\n", fInfo.Mode().String())
 		return false, nil
 	}
 }
@@ -532,12 +532,12 @@ func WatchFile(start chan bool, end chan bool, fName string, ws *websocket.Conn)
 
 					nLen = len
 					if err = websocket.Message.Send(ws, msg); err != nil {
-						info("send msg: %v\n", err)
+						Info("send msg: %v\n", err)
 					}
 				} else if event.Op&fsnotify.Chmod == fsnotify.Chmod {
 					_, msg, err := ReadFileToEnd(file, nLen)
 					if err = websocket.Message.Send(ws, msg); err != nil {
-						info("chmod and send msg to client, %v\n", err)
+						Info("chmod and send msg to client, %v\n", err)
 					}
 					done <- true
 					return
@@ -545,7 +545,7 @@ func WatchFile(start chan bool, end chan bool, fName string, ws *websocket.Conn)
 			case err := <-watcher.Errors:
 				log.Println("---------error:", err)
 			case <-end:
-				info("----receive end channel \n")
+				Info("----receive end channel \n")
 				done <- true
 				return
 
@@ -555,6 +555,6 @@ func WatchFile(start chan bool, end chan bool, fName string, ws *websocket.Conn)
 
 	<-done
 	close(done)
-	info("end ws close")
+	Info("end ws close")
 	ws.Close()
 }

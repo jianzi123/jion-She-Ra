@@ -8,12 +8,12 @@ import (
 	"github.com/haveatry/She-Ra/api/jobs"
 	"github.com/haveatry/She-Ra/utils"
 	"github.com/magiconair/properties"
+	"golang.org/x/net/websocket"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"syscall"
-	"golang.org/x/net/websocket"
 )
 
 var (
@@ -43,7 +43,7 @@ func main() {
 	flag.Parse()
 
 	// Load configurations from a file
-	info("loading configuration from [%s]", *propertiesFile)
+	utils.Info("loading configuration from [%s]", *propertiesFile)
 	var err error
 	var jobMng *jobs.JobManager
 	if props, err = properties.LoadFile(*propertiesFile, properties.UTF8); err != nil {
@@ -59,8 +59,8 @@ func main() {
 		log.Println("Fail to find", *logFile, "She-Ra start failed")
 		os.Exit(1)
 
-	}else{
-		log.Println("put log to ", logFileName)	
+	} else {
+		log.Println("put log to ", logFileName)
 	}
 	log.SetOutput(logFile)
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
@@ -112,7 +112,7 @@ func main() {
 	http.HandleFunc("/client", utils.Client)
 	http.Handle("/echoLog", websocket.Handler(jobMng.Log))
 
-	info("ready to serve on %s", basePath)
+	utils.Info("ready to serve on %s", basePath)
 	srv := endless.NewServer(addr, nil)
 	srv.SignalHooks[endless.PRE_SIGNAL][syscall.SIGUSR1] = append(
 		srv.SignalHooks[endless.PRE_SIGNAL][syscall.SIGUSR1],
@@ -133,9 +133,4 @@ func index(w http.ResponseWriter, r *http.Request) {
 
 func icon(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, SheRaIcon, http.StatusMovedPermanently)
-}
-
-// Log wrapper
-func info(template string, values ...interface{}) {
-	log.Printf("[She-Ra][info] "+template+"\n", values...)
 }
