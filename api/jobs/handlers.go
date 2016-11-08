@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"bufio"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -9,6 +10,9 @@ import (
 	"github.com/haveatry/She-Ra/lru"
 	. "github.com/haveatry/She-Ra/utils"
 	_ "github.com/mattn/go-sqlite3"
+	"golang.org/x/net/websocket"
+	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -19,10 +23,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"bufio"
-	"io"
-	"io/ioutil"
-	"golang.org/x/net/websocket"
 )
 
 type JobManager struct {
@@ -424,7 +424,6 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 		}
 		fPath := fmt.Sprintf("/workspace/%s/%s/.shera/executions/", key.Ns, key.Id)
 		lId := strconv.Itoa(int(seqno))
-	
 		//pull code from git
 		if codeManager := job.GetCodeManager(); codeManager != nil && codeManager.GitConfig != nil {
 			info("key.Ns=%s, key.Id=%s, seqno=%d begin to pulling code\n", key.Ns, key.Id, seqno)
@@ -466,7 +465,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 			}
 			// add job step finish to db and write to file.
 			fline := fmt.Sprintf("\n step %d finished. \n", progress)
-			WriteFile(fPath, lId, fline)		
+			WriteFile(fPath, lId, fline)
 		}
 
 		if buildManager := job.GetBuildManager(); buildManager != nil {
@@ -501,7 +500,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 			}
 			// add job step finish to db and write to file.
 			fline := fmt.Sprintf("\n step %d finished. \n", progress)
-                        WriteFile(fPath, lId, fline)   
+			WriteFile(fPath, lId, fline)
 		}
 
 		if job.BuildImgCmd != "" {
@@ -520,7 +519,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 			}
 			// add job step finish to db and write to file.
 			fline := fmt.Sprintf("\n step %d finished. \n", progress)
-                        WriteFile(fPath, lId, fline)   
+			WriteFile(fPath, lId, fline)
 		}
 
 		if job.PushImgCmd != "" {
@@ -539,7 +538,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 			}
 			// add job step finish to db and write to file.
 			fline := fmt.Sprintf("\n step %d finished. \n", progress)
-                        WriteFile(fPath, lId, fline)   
+			WriteFile(fPath, lId, fline)
 		}
 		jobExec := &Execution{
 			Namespace: key.Ns,
@@ -557,9 +556,9 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 		<-d.ExecChan[key]
 		d.WaitExec[key].Done()
 		d.accessLock.Unlock()
-		if err := os.Chmod(fPath + lId, 0777); err != nil {
-                	info("job finished normally, when changing mode %v\n", err)
-                }
+		if err := os.Chmod(fPath+lId, 0777); err != nil {
+			info("job finished normally, when changing mode %v\n", err)
+		}
 
 	}
 }
@@ -576,11 +575,58 @@ func (d *JobManager) openJobExecution(request *restful.Request, response *restfu
 
 //get the job execution list
 func (d *JobManager) getAllJobExecutions(request *restful.Request, response *restful.Response) {
+	namespace := request.PathParameter("namespace")
+	jobId := request.PathParameter("job-id")
+	info("namespace: %s jobId:%s", namespace, jobId)
 
+	jobExecView := make([]ExecView, 0, 20)
+	info("before jobExecView.len()=%d", len(jobExecView))
+	err := GetJobExecRecords(namespace, jobId, &jobExecView)
+	if err != nil {
+		response.AddHeader("Content-Type", "text/plain")
+		response.WriteErrorString(http.StatusInternalServerError, err.Error())
+		return
+
+	}
+
+	info("after jobExecView.len()=%d", len(jobExecView))
+	response.WriteHeaderAndEntity(http.StatusCreated, jobExecView)
 }
 
 //delete one job execution record
 func (d *JobManager) delJobExecution(request *restful.Request, response *restful.Response) {
+	namespace := request.PathParameter("namespace")
+	jobId := request.PathParameter("job-id")
+	executionId := request.PathParameter("execution_id")
+
+	if seqno, err := strconv.Atoi(executionId); err != nil {
+		response.AddHeader("Content-Type", "text/plain")
+		response.WriteErrorString(http.StatusInternalServerError, "please provide one valid seqno")
+
+	} else {
+
+		if finished, err := GetFinishStatus(namespace, jobId, int32(seqno)); err != nil {
+			response.AddHeader("Content-Type", "text/plain")
+			response.WriteErrorString(http.StatusInternalServerError, "failed to the status of this execution")
+
+		} else if finished {
+
+			if err := DelJobExecRecord(namespace, jobId, seqno); err != nil {
+				response.AddHeader("Content-Type", "text/plain")
+				response.WriteErrorString(http.StatusInternalServerError, "failed to delete job execution")
+
+			} else {
+				response.WriteHeader(http.StatusAccepted)
+
+			}
+
+		} else {
+			response.AddHeader("Content-Type", "text/plain")
+			response.WriteErrorString(http.StatusInternalServerError, "it is not allowed to delete one running execution")
+
+		}
+	}
+	return
 
 }
 
@@ -615,9 +661,9 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) 
 
 	stdout, err := jobCmd.StdoutPipe()
 	if err != nil {
-		log.Fatal(err)	
+		log.Fatal(err)
 		return EXEC_ERROR
-	}	
+	}
 
 	errout, err := jobCmd.StderrPipe()
 	if err != nil {
@@ -641,22 +687,22 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) 
 			EndTime:   time.Now().Unix(),
 		}
 		fPath := fmt.Sprintf("/workspace/%s/%s/.shera/executions/", key.Ns, key.Id)
-                lId   := strconv.Itoa(int(seqno))
-                fline := fmt.Sprintf("\nFailed in %d. \n", progress)
-                WriteFile(fPath, lId, fline)
-		if err := os.Chmod(fPath + lId, 0777); err != nil {
-                      info("when changing mode, %v\n", err)
-                }
-	
+		lId := strconv.Itoa(int(seqno))
+		fline := fmt.Sprintf("\nFailed in %d. \n", progress)
+		WriteFile(fPath, lId, fline)
+		if err := os.Chmod(fPath+lId, 0777); err != nil {
+			info("when changing mode, %v\n", err)
+		}
+
 		UpdateExecutionRecord(jobExec)
 		return EXEC_ERROR
 	}
 
 	done := make(chan error)
 	go func(key Key, number int, progress int, stdout io.ReadCloser, errout io.ReadCloser) {
-		
+
 		fPath := fmt.Sprintf("/workspace/%s/%s/.shera/executions/", key.Ns, key.Id)
-		lId   := strconv.Itoa(number)
+		lId := strconv.Itoa(number)
 		//info("waiting for command to finish.")
 		reader := bufio.NewReader(stdout)
 		erreader := bufio.NewReader(errout)
@@ -667,7 +713,7 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) 
 				break
 			}
 			WriteFile(fPath, lId, line)
-        	}
+		}
 		for {
 			line, err := erreader.ReadString('\n')
 			if err != nil || io.EOF == err {
@@ -723,12 +769,12 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) 
 				}
 				UpdateExecutionRecord(jobExec)
 				fPath := fmt.Sprintf("/workspace/%s/%s/.shera/executions/", key.Ns, key.Id)
-		                lId   := strconv.Itoa(int(seqno))
+				lId := strconv.Itoa(int(seqno))
 				fline := fmt.Sprintf("\nFailed in %d. \n", progress)
-                                WriteFile(fPath, lId, fline)
-				if err := os.Chmod(fPath + lId, 0777); err != nil {
-                		      info("when changing mode, %v\n", err)
-		                }
+				WriteFile(fPath, lId, fline)
+				if err := os.Chmod(fPath+lId, 0777); err != nil {
+					info("when changing mode, %v\n", err)
+				}
 
 				return EXEC_ERROR
 			} else {
@@ -759,29 +805,29 @@ func (d *JobManager) recoverSeqNo() error {
 	}
 }
 
-func (d *JobManager)Log(ws *websocket.Conn) {
+func (d *JobManager) Log(ws *websocket.Conn) {
 	start := make(chan bool)
-	end   := make(chan bool)
+	end := make(chan bool)
 	var boolean bool = false
 	for {
 		var data JobSock
-       		 //if err := websocket.Message.Receive(ws, &data); err != nil {
-       		 if err := websocket.JSON.Receive(ws, &data); err != nil {
-            		if err.Error() == "EOF" {
+		//if err := websocket.Message.Receive(ws, &data); err != nil {
+		if err := websocket.JSON.Receive(ws, &data); err != nil {
+			if err.Error() == "EOF" {
 				if boolean == false {
 					info("log job not start and end.")
 					ws.Close()
 					break
 				}
-				end<- false
-				break		
+				end <- false
+				break
 			}
 		}
 		if data.Flag == true {
 			if boolean == true {
 				info("log already start")
 				continue
-			}else{
+			} else {
 				boolean = true
 			}
 			fName := fmt.Sprintf("/workspace/%s/%s/.shera/executions/%s", data.NameSpace, data.JobId, data.SeqNo)
@@ -791,12 +837,12 @@ func (d *JobManager)Log(ws *websocket.Conn) {
 				ws.Close()
 				return
 			}
-			key := Key{ Ns: data.NameSpace, Id: data.JobId}
+			key := Key{Ns: data.NameSpace, Id: data.JobId}
 			if v, ok := d.SeqNo[key]; ok != true {
 				info("job key not in jobMng")
 				ws.Close()
 				return
-			}else if v < seqno {
+			} else if v < seqno {
 				info("job seqno is not used.")
 				ws.Close()
 				return
@@ -805,33 +851,59 @@ func (d *JobManager)Log(ws *websocket.Conn) {
 				info("----get finish status failed: %v\n", err)
 				ws.Close()
 				return
-			}else if flag == true {
+			} else if flag == true {
 				buf, err := ioutil.ReadFile(fName)
-                                if err = websocket.Message.Send(ws, string(buf)); err != nil {
-                                        info("send Message: %v\n", err)
-                                }
-                                info("-----readFile all.\n")
-                                ws.Close()
-                                return
+				if err = websocket.Message.Send(ws, string(buf)); err != nil {
+					info("send Message: %v\n", err)
+				}
+				info("-----readFile all.\n")
+				ws.Close()
+				return
 			}
 			buf, err := ioutil.ReadFile(fName)
 			if err != nil {
 				info("before read data dynamicly, %v\n", err)
 				return
 			}
-                        if err = websocket.Message.Send(ws, string(buf)); err != nil {
-                                 info("before read data dynamicly, read data from file %v\n ", err)
-                        }
+			if err = websocket.Message.Send(ws, string(buf)); err != nil {
+				info("before read data dynamicly, read data from file %v\n ", err)
+			}
 
-			go WatchFile(start, end, fName,  ws)
-			start<- true
+			go WatchFile(start, end, fName, ws)
+			start <- true
 		}
 
 	}
 }
 
+func createJdk(request *restful.Request, response *restful.Response) {
+	//      jdkVersion := request.PathParameter("JdkVersion")
+	//      jdkPath := request.PathParameter("JdkInstallPath")
+	//      jdk := []string{jdkVersion, jdkPath}
+	jdk := JDK{}
+	if err := request.ReadEntity(&jdk); err != nil {
+		response.AddHeader("Content-Type", "text/plain")
+		response.WriteErrorString(http.StatusInternalServerError, err.Error())
+		return
 
+	}
+	//
+	InsertJdk(jdk.Version, jdk.Path)
 
+	response.WriteHeaderAndEntity(http.StatusCreated, &jdk)
+
+}
+
+func deleteJdk(request *restful.Request, response *restful.Response) {
+
+	jdkVersion := request.PathParameter("jdkVersion")
+
+	if err := DeleteJdk(jdkVersion); err != nil {
+		info("fail to delete jdk:%v", err)
+	}
+	response.WriteHeader(http.StatusAccepted)
+
+}
 
 // Log wrapper
 func info(template string, values ...interface{}) {

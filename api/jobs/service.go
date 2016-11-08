@@ -84,7 +84,8 @@ func (d JobManager) WebService() *restful.WebService {
 		Doc("get all job execution records").
 		Operation("getAllJobExecutions").
 		Param(ws.PathParameter("namespace", "identifier of the namespace").DataType("string")).
-		Param(ws.PathParameter("job-id", "identifier of the job").DataType("string")))
+		Param(ws.PathParameter("job-id", "identifier of the job").DataType("string")).
+		Reads([]ExecView{}))
 
 	ws.Route(ws.GET("/jobs/{namespace}/{job-id}/{execution_id}/get").To(d.openJobExecution).
 		// docs
@@ -110,6 +111,18 @@ func (d JobManager) WebService() *restful.WebService {
 		Param(ws.PathParameter("namespace", "identifier of the namespace").DataType("string")).
 		Param(ws.PathParameter("job-id", "identifier of the job").DataType("string")).
 		Param(ws.PathParameter("execution_id", "identifier of one job execution").DataType("int")))
+
+	ws.Route(ws.POST("/jdk/create").To(createJdk).
+		// docs
+		Doc("create a jdk").
+		Operation("createJdk").
+		Reads(JDK{})) // from the request
+
+	ws.Route(ws.POST("/jdk/{jdkVersion}/delete").To(deleteJdk).
+		// docs
+		Doc("delete a jdk").
+		Operation("deleteJdk").
+		Param(ws.PathParameter("jdkVersion", "identifier of the jdk").DataType("string")))
 
 	return ws
 }
