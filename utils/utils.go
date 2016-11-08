@@ -105,8 +105,21 @@ func Init(props *properties.Properties) {
 	//create database for She-Ra project
 	var err error
 	WS_PATH = props.MustGet("working.path")
+	if err = os.MkdirAll(WS_PATH, 0770); err != nil {
+		Info("failed to create workspace dir\n")
+		os.Exit(1)
+
+	}
+
 	dbPath := props.MustGet("database.path")
-	if Database, err = sql.Open("sqlite3", dbPath); err != nil {
+	if err = os.MkdirAll(dbPath, 0770); err != nil {
+		Info("failed to create database dir\n")
+		os.Exit(1)
+
+	}
+
+	dbFile := dbPath + "She-Ra.db"
+	if Database, err = sql.Open("sqlite3", dbFile); err != nil {
 		Info("failed to setup database")
 		os.Exit(1)
 	}
