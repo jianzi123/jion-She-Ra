@@ -57,6 +57,14 @@ type ExecView struct {
 	EndTime   int64
 }
 
+type JobView struct {
+	status          int32
+	jobId           string
+	lastSuccessTime int64
+	lastFailureTime int64
+	lastDuration    int64
+}
+
 type JDK struct {
 	Version string
 	Path    string
@@ -80,6 +88,7 @@ const (
 const (
 	EXEC_SUCCESS int32 = 0
 	EXEC_FAILURE int32 = 1
+	EXEC_NONE    int32 = 2
 )
 
 const (
@@ -99,19 +108,104 @@ func Init(props *properties.Properties) {
 	dbPath := props.MustGet("database.path")
 	if Database, err = sql.Open("sqlite3", dbPath); err != nil {
 		Info("failed to setup database")
+		os.Exit(1)
 	}
 
 	//create table job to store execution information
 	sql := `Create table IF NOT EXISTS job(namespace CHAR(100) NOT NULL, jobId CHAR(100) NOT NULL,seqno integer NOT NULL,progress integer,status integer, finished integer, cancelled integer, startTime integer, endTime integer, PRIMARY KEY(namespace, jobId, seqno))`
 	if _, err = Database.Exec(sql); err != nil {
 		Info("failed to create table job")
+		os.Exit(1)
+	}
+
+	//create job display info table
+	sql = `Create table IF NOT EXISTS jobView(namespace CHAR(100) NOT NULL, jobId CHAR(100) NOT NULL,status integer, startTime integer, endTime integer, lastSuccessTime integer, lastFailureTime integer, PRIMARY KEY(namespace, jobId))`
+	if _, err = Database.Exec(sql); err != nil {
+		Info("failed to create table jobView")
+		os.Exit(1)
 	}
 
 	//create table jdk to store execution information
 	sql = `create table if not exists jdk(version, installpath string, PRIMARY KEY(version))`
 	if _, err = Database.Exec(sql); err != nil {
 		Info("failed to create table jdk")
+		os.Exit(1)
 	}
+}
+
+func InsertJobViewRecord(namespace, jobId string) error {
+	if stmt, err := Database.Prepare("insert into jobView(namespace, jobId, status, startTime, endTime, lastSuccessTime, lastFailureTime) values (?,?,?,?,?,?,?)"); err != nil {
+		Info("failed to prepare insert sql:%v\n", err)
+		return err
+
+	} else if _, err := stmt.Exec(namespace, jobId, EXEC_NONE, 0, 0, 0, 0); err != nil {
+		Info("failed to insert data into database:%v\n", err)
+		return err
+	}
+
+	return nil
+}
+
+func UpdateJobViewStartTime(namespace, jobId string, startTime int64) {
+	if stmt, err := Database.Prepare("update jobView set startTime = ? where namespace = ? and jobId = ?"); err != nil {
+		Info("failed to prepare update sql:%v\n", err)
+
+	} else if _, err := stmt.Exec(startTime, namespace, jobId); err != nil {
+		Info("failed to update data startTime:%v\n", err)
+	}
+
+}
+
+func UpdateJobViewEndTime(namespace, jobId string, endTime int64) {
+	if stmt, err := Database.Prepare("update jobView set endTime = ? where namespace = ? and jobId = ?"); err != nil {
+		Info("failed to prepare update sql:%v\n", err)
+
+	} else if _, err := stmt.Exec(endTime, namespace, jobId); err != nil {
+		Info("failed to update data startTime:%v\n", err)
+	}
+
+}
+
+func UpdateJobViewStatus(namespace, jobId string, endTime int64, status int32) {
+	var sql string
+	if status == EXEC_FAILURE {
+		sql = "update jobView set endTime = ?, lastFailureTime = ?, status = ? where namespace = ? and jobId = ?"
+	} else if status == EXEC_SUCCESS {
+		sql = "update jobView set endTime = ?, lastSuccessTime = ?, status = ? where namespace = ? and jobId = ?"
+	} else {
+		Info("Not allowed to update jobView status when the status is invalid\n")
+		return
+	}
+
+	if stmt, err := Database.Prepare(sql); err != nil {
+		Info("failed to prepare update sql:%v\n", err)
+
+	} else if _, err := stmt.Exec(endTime, endTime, status, namespace, jobId); err != nil {
+		Info("failed to update data startTime:%v\n", err)
+	}
+
+}
+
+func GetJobViewRecords(namespace, jobId string, jobView *[]JobView) error {
+
+	var view JobView
+	var startTime, endTime int64
+
+	rows, err := Database.Query("select status, jobId, startTime, endTime, lastSuccessTime, lastFailureTime  from job where namespace =? and jobId = ?", namespace, jobId)
+	if err != nil {
+		Info("failed to prepare query sql:%v\n", err)
+		return err
+	}
+
+	for rows.Next() {
+		if err := rows.Scan(&view.status, &view.jobId, &startTime, &endTime, &view.lastSuccessTime, &view.lastFailureTime); err != nil {
+			log.Println(err)
+		}
+
+		view.lastDuration = endTime - startTime
+		*jobView = append(*jobView, view)
+	}
+	return nil
 }
 
 func InsertJdk(version, installPath string) {

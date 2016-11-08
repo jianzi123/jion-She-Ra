@@ -145,9 +145,6 @@ func (d *JobManager) createJob(request *restful.Request, response *restful.Respo
 
 	d.accessLock.Lock()
 	d.SeqNo[key] = 0
-	//d.ExecChan[key] = make(chan int, 1)
-	//d.KillExecChan[key] = make(chan int, 1)
-	//d.WaitExec[key] = waitGroup
 	d.accessLock.Unlock()
 
 	createWorkSpace := &JobCommand{
@@ -161,6 +158,13 @@ func (d *JobManager) createJob(request *restful.Request, response *restful.Respo
 		response.AddHeader("Content-Type", "text/plain")
 		response.WriteErrorString(http.StatusInternalServerError, err.Error())
 		return
+	}
+
+	if err := InsertJobViewRecord(key.Ns, key.Id); err != nil {
+		response.AddHeader("Content-Type", "text/plain")
+		response.WriteErrorString(http.StatusInternalServerError, err.Error())
+		return
+
 	}
 
 	response.WriteHeaderAndEntity(http.StatusCreated, &job)
@@ -196,6 +200,22 @@ func (d *JobManager) readJob(request *restful.Request, response *restful.Respons
 }
 
 func (d *JobManager) readAllJobs(request *restful.Request, response *restful.Response) {
+	namespace := request.PathParameter("namespace")
+	jobId := request.PathParameter("job-id")
+	Info("namespace: %s jobId:%s", namespace, jobId)
+
+	var jobView []JobView
+	Info("before jobView.len()=%d", len(jobView))
+	err := GetJobViewRecords(namespace, jobId, &jobView)
+	if err != nil {
+		response.AddHeader("Content-Type", "text/plain")
+		response.WriteErrorString(http.StatusInternalServerError, err.Error())
+		return
+
+	}
+
+	Info("after jobView.len()=%d", len(jobView))
+	response.WriteHeaderAndEntity(http.StatusCreated, jobView)
 
 }
 
@@ -260,7 +280,7 @@ func (d *JobManager) delJob(request *restful.Request, response *restful.Response
 
 	//Need to kill runnig execution of this job
 	go func() {
-		if _, OK := <-d.KillExecChan[key]; OK == false {
+		if _, OK := d.KillExecChan[key]; !OK {
 			d.KillExecChan[key] = make(chan int, 1)
 		}
 		d.KillExecChan[key] <- EXEC_KILL_ALL
@@ -343,6 +363,7 @@ func (d *JobManager) execJob(request *restful.Request, response *restful.Respons
 		d.SeqNo[key] = d.SeqNo[key] + 1
 		Info("insertRecord: key.ns=%s, key.id=%s, jobExec.SeqNo=%d\n", key.Ns, key.Id, jobExec.SeqNo)
 		InsertExecutionRecord(jobExec)
+		UpdateJobViewStartTime(key.Ns, key.Id, jobExec.StartTime)
 		Info("Get the write lock successfully")
 		var OK bool
 		if _, OK = d.WaitExec[key]; !OK {
@@ -552,6 +573,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 			EndTime:   time.Now().Unix(),
 		}
 		UpdateExecutionRecord(jobExec)
+		UpdateJobViewStatus(jobExec.Namespace, jobExec.JobId, jobExec.EndTime, jobExec.EndStatus)
 		d.accessLock.Lock()
 		<-d.ExecChan[key]
 		d.WaitExec[key].Done()
@@ -633,6 +655,7 @@ func (d *JobManager) delJobExecution(request *restful.Request, response *restful
 
 //force stop one job execution
 func (d *JobManager) killJobExecution(request *restful.Request, response *restful.Response) {
+	Info("Enter killJobExecution\n")
 	ns := request.PathParameter("namespace")
 	jobId := request.PathParameter("job-id")
 	if seqno, err := strconv.Atoi(request.PathParameter("execution_id")); err != nil {
@@ -641,12 +664,15 @@ func (d *JobManager) killJobExecution(request *restful.Request, response *restfu
 		return
 	} else {
 		key := Key{Ns: ns, Id: jobId}
+		Info("killJobExecution key.Ns=%s key.Id=%s\n", key.Ns, key.Id)
 		//update the execution as cancelled in the database
 		SetExecutionCancelled(key.Ns, key.Id, seqno)
 		go func() {
-			if _, OK := <-d.KillExecChan[key]; OK == false {
+			if _, OK := d.KillExecChan[key]; !OK {
+				Info("Init d.KillExecChan\n")
 				d.KillExecChan[key] = make(chan int, 1)
 			}
+			Info("write to d.KillExecChan\n")
 			d.KillExecChan[key] <- seqno
 		}()
 
@@ -696,6 +722,7 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) 
 		}
 
 		UpdateExecutionRecord(jobExec)
+		UpdateJobViewStatus(jobExec.Namespace, jobExec.JobId, jobExec.EndTime, jobExec.EndStatus)
 		return EXEC_ERROR
 	}
 
@@ -730,7 +757,6 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) 
 		select {
 		case recvCode = <-d.KillExecChan[key]:
 			Info("received kill execution command %d, seqno:%d\n", recvCode, seqno)
-			close(d.KillExecChan[key])
 			if recvCode == int(seqno) || recvCode == EXEC_KILL_ALL {
 				Info("begin to kill the execution command\n")
 				pgid, err := syscall.Getpgid(jobCmd.Process.Pid)
@@ -750,6 +776,7 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) 
 					EndTime:   time.Now().Unix(),
 				}
 				UpdateExecutionRecord(jobExec)
+				UpdateJobViewStatus(jobExec.Namespace, jobExec.JobId, jobExec.EndTime, jobExec.EndStatus)
 				return recvCode
 			}
 			break
@@ -769,6 +796,7 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) 
 					EndTime:   time.Now().Unix(),
 				}
 				UpdateExecutionRecord(jobExec)
+				UpdateJobViewStatus(jobExec.Namespace, jobExec.JobId, jobExec.EndTime, jobExec.EndStatus)
 				fPath := fmt.Sprintf("/workspace/%s/%s/.shera/executions/", key.Ns, key.Id)
 				lId := strconv.Itoa(int(seqno))
 				fline := fmt.Sprintf("\nFailed in %d. \n", progress)

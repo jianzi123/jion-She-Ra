@@ -36,7 +36,7 @@ func (d JobManager) WebService() *restful.WebService {
 	ws.Consumes(restful.MIME_XML, restful.MIME_JSON).
 		Produces(restful.MIME_JSON, restful.MIME_XML)
 
-	ws.Route(ws.GET("/jobs/{namespace}/{job-id}").To(d.readJob).
+	ws.Route(ws.GET("/jobs/get/{namespace}/{job-id}").To(d.readJob).
 		// docs
 		Doc("get a job config").
 		Operation("readJob").
@@ -44,14 +44,15 @@ func (d JobManager) WebService() *restful.WebService {
 		Param(ws.PathParameter("job-id", "identifier of the job").DataType("string")).
 		Writes(Job{})) // on the response
 
-	ws.Route(ws.GET("/jobs").To(d.readAllJobs).
+	ws.Route(ws.GET("/jobs/getall").To(d.readAllJobs).
 		// docs
 		Doc("get job list").
 		Operation("readAllJobs").
+		Param(ws.PathParameter("namespace", "identifier of the namespace").DataType("string")).
 		Param(ws.PathParameter("job-id", "identifier of the job").DataType("string")).
-		Writes([]Job{})) // on the response
+		Writes([]JobView{})) // on the response
 
-	ws.Route(ws.POST("/jobs/{namespace}/create").To(d.createJob).
+	ws.Route(ws.POST("/jobs/create/{namespace}").To(d.createJob).
 		// docs
 		Doc("create a job").
 		Operation("createJob").
@@ -65,21 +66,21 @@ func (d JobManager) WebService() *restful.WebService {
 		Param(ws.PathParameter("namespace", "identifier of the namespace").DataType("string")).
 		Reads(Job{})) // from the request
 
-	ws.Route(ws.POST("/jobs/{namespace}/{job-id}").To(d.execJob).
+	ws.Route(ws.POST("/jobs/exec/{namespace}/{job-id}").To(d.execJob).
 		// docs
 		Doc("execute a job").
 		Operation("execJob").
 		Param(ws.PathParameter("namespace", "identifier of the namespace").DataType("string")).
 		Param(ws.PathParameter("job-id", "identifier of the job").DataType("string")))
 
-	ws.Route(ws.DELETE("/jobs/{namespace}/{job-id}").To(d.delJob).
+	ws.Route(ws.DELETE("/jobs/del/{namespace}/{job-id}").To(d.delJob).
 		// docs
 		Doc("delete a job").
 		Operation("delJob").
 		Param(ws.PathParameter("namespace", "identifier of the namespace").DataType("string")).
 		Param(ws.PathParameter("job-id", "identifier of the job").DataType("string")))
 
-	ws.Route(ws.GET("/jobs/{namespace}/{job-id}/executions").To(d.getAllJobExecutions).
+	ws.Route(ws.GET("/jobs/get/{namespace}/{job-id}/executions").To(d.getAllJobExecutions).
 		// docs
 		Doc("get all job execution records").
 		Operation("getAllJobExecutions").
@@ -87,7 +88,7 @@ func (d JobManager) WebService() *restful.WebService {
 		Param(ws.PathParameter("job-id", "identifier of the job").DataType("string")).
 		Reads([]ExecView{}))
 
-	ws.Route(ws.GET("/jobs/{namespace}/{job-id}/{execution_id}/get").To(d.openJobExecution).
+	ws.Route(ws.GET("/jobs/get/{namespace}/{job-id}/{execution_id}").To(d.openJobExecution).
 		// docs
 		Doc("read a job execution record").
 		Operation("openJobExecution").
@@ -96,7 +97,7 @@ func (d JobManager) WebService() *restful.WebService {
 		Param(ws.PathParameter("execution_id", "identifier of one job execution").DataType("int")).
 		Reads(Execution{}))
 
-	ws.Route(ws.PUT("/jobs/{namespace}/{job-id}/{execution_id}/kill").To(d.killJobExecution).
+	ws.Route(ws.PUT("/jobs/kill/{namespace}/{job-id}/{execution_id}").To(d.killJobExecution).
 		// docs
 		Doc("force stop a job execution").
 		Operation("killJobExecution").
@@ -104,7 +105,7 @@ func (d JobManager) WebService() *restful.WebService {
 		Param(ws.PathParameter("job-id", "identifier of the job").DataType("string")).
 		Param(ws.PathParameter("execution_id", "identifier of one job execution").DataType("int")))
 
-	ws.Route(ws.DELETE("/jobs/{namespace}/{job-id}/{execution_id}/delete").To(d.delJobExecution).
+	ws.Route(ws.DELETE("/jobs/del/{namespace}/{job-id}/{execution_id}").To(d.delJobExecution).
 		// docs
 		Doc("delete a job execution record").
 		Operation("delJobExecution").
@@ -118,7 +119,7 @@ func (d JobManager) WebService() *restful.WebService {
 		Operation("createJdk").
 		Reads(JDK{})) // from the request
 
-	ws.Route(ws.POST("/jdk/{jdkVersion}/delete").To(deleteJdk).
+	ws.Route(ws.POST("/jdk/del/{jdkVersion}").To(deleteJdk).
 		// docs
 		Doc("delete a jdk").
 		Operation("deleteJdk").
