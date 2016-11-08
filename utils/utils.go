@@ -31,8 +31,15 @@ const (
 	EXEC_ERROR        = 16
 )
 
-var Database *sql.DB
-var WS_PATH string
+var (
+	Database     *sql.DB
+	WS_PATH      string
+	IMG_REGISTRY string
+	IMG_HOST     string
+	IMG_USER     string
+	IMG_PASSWD   string
+	IMG_DBNAME   string
+)
 
 type Key struct {
 	Ns string
@@ -105,14 +112,21 @@ func Init(props *properties.Properties) {
 	//create database for She-Ra project
 	var err error
 	WS_PATH = props.MustGet("working.path")
-	if err = os.MkdirAll(WS_PATH, 0770); err != nil {
+	if err = os.MkdirAll(WS_PATH, 0755); err != nil {
 		Info("failed to create workspace dir\n")
 		os.Exit(1)
 
 	}
 
+	//get docker related provision info
+	IMG_USER = props.MustGet("img.user")
+	IMG_HOST = props.MustGet("img.host")
+	IMG_DBNAME = props.MustGet("img.dbname")
+	IMG_PASSWD = props.MustGet("img.passwd")
+	IMG_REGISTRY = props.MustGet("img.registry")
+
 	dbPath := props.MustGet("database.path")
-	if err = os.MkdirAll(dbPath, 0770); err != nil {
+	if err = os.MkdirAll(dbPath, 0755); err != nil {
 		Info("failed to create database dir\n")
 		os.Exit(1)
 
