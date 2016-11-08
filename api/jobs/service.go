@@ -44,12 +44,11 @@ func (d JobManager) WebService() *restful.WebService {
 		Param(ws.PathParameter("job-id", "identifier of the job").DataType("string")).
 		Writes(Job{})) // on the response
 
-	ws.Route(ws.GET("/jobs/getall").To(d.readAllJobs).
+	ws.Route(ws.GET("/jobs/getall/{namespace}").To(d.readAllJobs).
 		// docs
 		Doc("get job list").
 		Operation("readAllJobs").
 		Param(ws.PathParameter("namespace", "identifier of the namespace").DataType("string")).
-		Param(ws.PathParameter("job-id", "identifier of the job").DataType("string")).
 		Writes([]JobView{})) // on the response
 
 	ws.Route(ws.POST("/jobs/create/{namespace}").To(d.createJob).
@@ -85,8 +84,7 @@ func (d JobManager) WebService() *restful.WebService {
 		Doc("get all job execution records").
 		Operation("getAllJobExecutions").
 		Param(ws.PathParameter("namespace", "identifier of the namespace").DataType("string")).
-		Param(ws.PathParameter("job-id", "identifier of the job").DataType("string")).
-		Reads([]ExecView{}))
+		Param(ws.PathParameter("job-id", "identifier of the job").DataType("string")))
 
 	ws.Route(ws.GET("/jobs/get/{namespace}/{job-id}/{execution_id}").To(d.openJobExecution).
 		// docs

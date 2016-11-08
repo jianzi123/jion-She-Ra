@@ -201,12 +201,12 @@ func (d *JobManager) readJob(request *restful.Request, response *restful.Respons
 
 func (d *JobManager) readAllJobs(request *restful.Request, response *restful.Response) {
 	namespace := request.PathParameter("namespace")
-	jobId := request.PathParameter("job-id")
-	Info("namespace: %s jobId:%s", namespace, jobId)
+	//jobId := request.PathParameter("job-id")
+	Info("namespace: %s ", namespace)
 
 	var jobView []JobView
 	Info("before jobView.len()=%d", len(jobView))
-	err := GetJobViewRecords(namespace, jobId, &jobView)
+	err := GetJobViewRecords(namespace, &jobView)
 	if err != nil {
 		response.AddHeader("Content-Type", "text/plain")
 		response.WriteErrorString(http.StatusInternalServerError, err.Error())

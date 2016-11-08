@@ -58,11 +58,11 @@ type ExecView struct {
 }
 
 type JobView struct {
-	status          int32
-	jobId           string
-	lastSuccessTime int64
-	lastFailureTime int64
-	lastDuration    int64
+	Status          int32
+	JobId           string
+	LastSuccessTime int64
+	LastFailureTime int64
+	LastDuration    int64
 }
 
 type JDK struct {
@@ -186,23 +186,25 @@ func UpdateJobViewStatus(namespace, jobId string, endTime int64, status int32) {
 
 }
 
-func GetJobViewRecords(namespace, jobId string, jobView *[]JobView) error {
+func GetJobViewRecords(namespace string, jobView *[]JobView) error {
 
 	var view JobView
 	var startTime, endTime int64
 
-	rows, err := Database.Query("select status, jobId, startTime, endTime, lastSuccessTime, lastFailureTime  from job where namespace =? and jobId = ?", namespace, jobId)
+	rows, err := Database.Query("select status, jobId, startTime, endTime, lastSuccessTime, lastFailureTime  from jobView where namespace =?", namespace)
 	if err != nil {
 		Info("failed to prepare query sql:%v\n", err)
 		return err
 	}
 
 	for rows.Next() {
-		if err := rows.Scan(&view.status, &view.jobId, &startTime, &endTime, &view.lastSuccessTime, &view.lastFailureTime); err != nil {
+		if err := rows.Scan(&view.Status, &view.JobId, &startTime, &endTime, &view.LastSuccessTime, &view.LastFailureTime); err != nil {
 			log.Println(err)
 		}
 
-		view.lastDuration = endTime - startTime
+		Info("get one jobView record\n")
+		view.LastDuration = endTime - startTime
+		Info("get one jobView record %v\n", view)
 		*jobView = append(*jobView, view)
 	}
 	return nil
