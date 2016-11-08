@@ -835,5 +835,6 @@ func (d *JobManager)Log(ws *websocket.Conn) {
 
 // Log wrapper
 func info(template string, values ...interface{}) {
-	log.Printf("[She-Ra][info] "+template+"\n", values...)
+	//log.Printf("[She-Ra][info] "+template+"\n", values...)
+	log.Output(2, fmt.Sprintf("[She-Ra][info] "+template+"\n", values...))
 }
