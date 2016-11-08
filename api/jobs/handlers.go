@@ -3,6 +3,7 @@ package jobs
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"github.com/emicklei/go-restful"
 	"github.com/haveatry/She-Ra/configdata"
 	"github.com/haveatry/She-Ra/lru"
@@ -18,6 +19,10 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"bufio"
+	"io"
+	"io/ioutil"
+	"golang.org/x/net/websocket"
 )
 
 type JobManager struct {
@@ -417,7 +422,9 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 			d.accessLock.Unlock()
 			return
 		}
-
+		fPath := fmt.Sprintf("/workspace/%s/%s/.shera/executions/", key.Ns, key.Id)
+		lId := strconv.Itoa(int(seqno))
+	
 		//pull code from git
 		if codeManager := job.GetCodeManager(); codeManager != nil && codeManager.GitConfig != nil {
 			info("key.Ns=%s, key.Id=%s, seqno=%d begin to pulling code\n", key.Ns, key.Id, seqno)
@@ -457,6 +464,9 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 				d.accessLock.Unlock()
 				return
 			}
+			// add job step finish to db and write to file.
+			fline := fmt.Sprintf("\n step %d finished. \n", progress)
+			WriteFile(fPath, lId, fline)		
 		}
 
 		if buildManager := job.GetBuildManager(); buildManager != nil {
@@ -489,6 +499,9 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 					return
 				}
 			}
+			// add job step finish to db and write to file.
+			fline := fmt.Sprintf("\n step %d finished. \n", progress)
+                        WriteFile(fPath, lId, fline)   
 		}
 
 		if job.BuildImgCmd != "" {
@@ -505,6 +518,9 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 				d.accessLock.Unlock()
 				return
 			}
+			// add job step finish to db and write to file.
+			fline := fmt.Sprintf("\n step %d finished. \n", progress)
+                        WriteFile(fPath, lId, fline)   
 		}
 
 		if job.PushImgCmd != "" {
@@ -521,6 +537,9 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 				d.accessLock.Unlock()
 				return
 			}
+			// add job step finish to db and write to file.
+			fline := fmt.Sprintf("\n step %d finished. \n", progress)
+                        WriteFile(fPath, lId, fline)   
 		}
 		jobExec := &Execution{
 			Namespace: key.Ns,
@@ -538,8 +557,11 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 		<-d.ExecChan[key]
 		d.WaitExec[key].Done()
 		d.accessLock.Unlock()
-	}
+		if err := os.Chmod(fPath + lId, 0777); err != nil {
+                	info("job finished normally, when changing mode %v\n", err)
+                }
 
+	}
 }
 
 //watch one job execution status change
@@ -590,8 +612,21 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) 
 
 	var recvCode int
 	jobCmd := exec.Command(cmd.Name, cmd.Args...)
+
+	stdout, err := jobCmd.StdoutPipe()
+	if err != nil {
+		log.Fatal(err)	
+		return EXEC_ERROR
+	}	
+
+	errout, err := jobCmd.StderrPipe()
+	if err != nil {
+		info("get stderr failed:%v\n", err)
+		return EXEC_ERROR
+	}
+
 	jobCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	err := jobCmd.Start()
+	err = jobCmd.Start()
 	if err != nil {
 		info("err occurred when start executing command: (cmd=%s, agrs=%v): \\n%v\\n", cmd.Name, cmd.Args)
 		jobExec := &Execution{
@@ -605,14 +640,44 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) 
 			StartTime: 0,
 			EndTime:   time.Now().Unix(),
 		}
+		fPath := fmt.Sprintf("/workspace/%s/%s/.shera/executions/", key.Ns, key.Id)
+                lId   := strconv.Itoa(int(seqno))
+                fline := fmt.Sprintf("\nFailed in %d. \n", progress)
+                WriteFile(fPath, lId, fline)
+		if err := os.Chmod(fPath + lId, 0777); err != nil {
+                      info("when changing mode, %v\n", err)
+                }
+	
 		UpdateExecutionRecord(jobExec)
 		return EXEC_ERROR
 	}
 
 	done := make(chan error)
-	go func() {
+	go func(key Key, number int, progress int, stdout io.ReadCloser, errout io.ReadCloser) {
+		
+		fPath := fmt.Sprintf("/workspace/%s/%s/.shera/executions/", key.Ns, key.Id)
+		lId   := strconv.Itoa(number)
+		//info("waiting for command to finish.")
+		reader := bufio.NewReader(stdout)
+		erreader := bufio.NewReader(errout)
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil || io.EOF == err {
+				//info("exec cmd finished. %v\n", err)
+				break
+			}
+			WriteFile(fPath, lId, line)
+        	}
+		for {
+			line, err := erreader.ReadString('\n')
+			if err != nil || io.EOF == err {
+				//info("get error out finished: %v\n", err)
+				break
+			}
+			WriteFile(fPath, lId, line)
+		}
 		done <- jobCmd.Wait()
-	}()
+	}(key, int(seqno), int(progress), stdout, errout)
 
 	for {
 		select {
@@ -657,6 +722,14 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) 
 					EndTime:   time.Now().Unix(),
 				}
 				UpdateExecutionRecord(jobExec)
+				fPath := fmt.Sprintf("/workspace/%s/%s/.shera/executions/", key.Ns, key.Id)
+		                lId   := strconv.Itoa(int(seqno))
+				fline := fmt.Sprintf("\nFailed in %d. \n", progress)
+                                WriteFile(fPath, lId, fline)
+				if err := os.Chmod(fPath + lId, 0777); err != nil {
+                		      info("when changing mode, %v\n", err)
+		                }
+
 				return EXEC_ERROR
 			} else {
 				return EXEC_FINISHED
@@ -685,6 +758,80 @@ func (d *JobManager) recoverSeqNo() error {
 		return nil
 	}
 }
+
+func (d *JobManager)Log(ws *websocket.Conn) {
+	start := make(chan bool)
+	end   := make(chan bool)
+	var boolean bool = false
+	for {
+		var data JobSock
+       		 //if err := websocket.Message.Receive(ws, &data); err != nil {
+       		 if err := websocket.JSON.Receive(ws, &data); err != nil {
+            		if err.Error() == "EOF" {
+				if boolean == false {
+					info("log job not start and end.")
+					ws.Close()
+					break
+				}
+				end<- false
+				break		
+			}
+		}
+		if data.Flag == true {
+			if boolean == true {
+				info("log already start")
+				continue
+			}else{
+				boolean = true
+			}
+			fName := fmt.Sprintf("/workspace/%s/%s/.shera/executions/%s", data.NameSpace, data.JobId, data.SeqNo)
+			seqno, err := strconv.Atoi(data.SeqNo)
+			if err != nil {
+				info("----convent seqno to string failed: %v\n", err)
+				ws.Close()
+				return
+			}
+			key := Key{ Ns: data.NameSpace, Id: data.JobId}
+			if v, ok := d.SeqNo[key]; ok != true {
+				info("job key not in jobMng")
+				ws.Close()
+				return
+			}else if v < seqno {
+				info("job seqno is not used.")
+				ws.Close()
+				return
+			}
+			if flag, err := GetFinishStatus(data.NameSpace, data.JobId, int32(seqno)); err != nil {
+				info("----get finish status failed: %v\n", err)
+				ws.Close()
+				return
+			}else if flag == true {
+				buf, err := ioutil.ReadFile(fName)
+                                if err = websocket.Message.Send(ws, string(buf)); err != nil {
+                                        info("send Message: %v\n", err)
+                                }
+                                info("-----readFile all.\n")
+                                ws.Close()
+                                return
+			}
+			buf, err := ioutil.ReadFile(fName)
+			if err != nil {
+				info("before read data dynamicly, %v\n", err)
+				return
+			}
+                        if err = websocket.Message.Send(ws, string(buf)); err != nil {
+                                 info("before read data dynamicly, read data from file %v\n ", err)
+                        }
+
+			go WatchFile(start, end, fName,  ws)
+			start<- true
+		}
+
+	}
+}
+
+
+
 
 // Log wrapper
 func info(template string, values ...interface{}) {

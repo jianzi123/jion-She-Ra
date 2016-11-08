@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"golang.org/x/net/websocket"
 )
 
 var (
@@ -58,6 +59,8 @@ func main() {
 		log.Println("Fail to find", *logFile, "She-Ra start failed")
 		os.Exit(1)
 
+	}else{
+		log.Println("put log to ", logFileName)	
 	}
 	log.SetOutput(logFile)
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
@@ -105,6 +108,9 @@ func main() {
 
 	// Serve favicon.ico
 	http.HandleFunc("/favion.ico", icon)
+	// log router
+	http.HandleFunc("/client", utils.Client)
+	http.Handle("/echoLog", websocket.Handler(jobMng.Log))
 
 	info("ready to serve on %s", basePath)
 	srv := endless.NewServer(addr, nil)
