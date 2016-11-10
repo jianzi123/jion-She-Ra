@@ -59,6 +59,11 @@ func (d JobManager) WebService() *restful.WebService {
 		Param(ws.PathParameter("namespace", "identifier of the namespace").DataType("string")).
 		Reads(Job{})) // from the request
 
+	ws.Route(ws.POST("/jdk/create").To(createJdk).
+		// docs
+		Doc("create a jdk").
+		Operation("createJdk").
+		Reads(JDK{})) // from the request
 	ws.Route(ws.PUT("/jobs/update").To(d.updateJob).
 		// docs
 		Doc("update a job").
@@ -112,12 +117,6 @@ func (d JobManager) WebService() *restful.WebService {
 		Param(ws.PathParameter("namespace", "identifier of the namespace").DataType("string")).
 		Param(ws.PathParameter("job-id", "identifier of the job").DataType("string")).
 		Param(ws.PathParameter("execution_id", "identifier of one job execution").DataType("int")))
-
-	ws.Route(ws.POST("/jdk/create").To(createJdk).
-		// docs
-		Doc("create a jdk").
-		Operation("createJdk").
-		Reads(JDK{})) // from the request
 
 	ws.Route(ws.POST("/jdk/del/{jdkVersion}").To(deleteJdk).
 		// docs

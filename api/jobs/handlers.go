@@ -152,6 +152,12 @@ func (d *JobManager) createJob(request *restful.Request, response *restful.Respo
 		Args: []string{"-p", WS_PATH + key.Ns + "/" + key.Id + "/.shera/" + EXECUTION_PATH},
 	}
 	createWorkSpace.Exec()
+	//create Dockerfile
+	DockerfilePath := WS_PATH + key.Ns + "/" + key.Id + "/.shera/"
+	DockerfileName := "Dockerfile"
+	DockerfileContent := job.DockerfileContent
+
+	WriteFile(DockerfilePath, DockerfileName, DockerfileContent)
 
 	//encode job info and store job info into config file
 	if err := WriteData(key, &job); err != nil {
@@ -425,24 +431,27 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 			Info("ChdirError (%s): %s\\n", targetPath, err)
 			return
 		}
+		/*
+			//select correct jdk version
+			switchJdkCmd := &JobCommand{
+				Name: "bash",
+				Args: []string{"-c", "echo 1 | alternatives --config java"},
+			}
 
-		//select correct jdk version
-		switchJdkCmd := &JobCommand{
-			Name: "bash",
-			Args: []string{"-c", "echo 1 | alternatives --config java"},
-		}
+			if job.JdkVersion == "jdk1.7" {
+				switchJdkCmd.Args = []string{"-c", "echo 2 | alternatives --config java"}
+			}
 
-		if job.JdkVersion == "jdk1.7" {
-			switchJdkCmd.Args = []string{"-c", "echo 2 | alternatives --config java"}
-		}
+			if retCode = switchJdkCmd.ExecAsync(d, key, seqno, EXEC_INIT); retCode != EXEC_FINISHED {
+				d.accessLock.Lock()
+				<-d.ExecChan[key]
+				d.WaitExec[key].Done()
+				d.accessLock.Unlock()
+				return
+			}
+		*/
+		jdkVersion := job.JdkVersion
 
-		if retCode = switchJdkCmd.ExecAsync(d, key, seqno, EXEC_INIT); retCode != EXEC_FINISHED {
-			d.accessLock.Lock()
-			<-d.ExecChan[key]
-			d.WaitExec[key].Done()
-			d.accessLock.Unlock()
-			return
-		}
 		fPath := fmt.Sprintf("/workspace/%s/%s/.shera/executions/", key.Ns, key.Id)
 		lId := strconv.Itoa(int(seqno))
 		//pull code from git
@@ -453,7 +462,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 				Name: "git",
 				Args: []string{"init"},
 			}
-			if retCode = gitInitCmd.ExecAsync(d, key, seqno, progress); retCode != EXEC_FINISHED {
+			if retCode = gitInitCmd.ExecAsync(d, key, seqno, progress, jdkVersion); retCode != EXEC_FINISHED {
 				d.accessLock.Lock()
 				<-d.ExecChan[key]
 				d.WaitExec[key].Done()
@@ -465,7 +474,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 				Name: "git",
 				Args: []string{"config", "remote.origin.url", codeManager.GitConfig.Repo.Url},
 			}
-			if retCode = gitConfigCmd.ExecAsync(d, key, seqno, progress); retCode != EXEC_FINISHED {
+			if retCode = gitConfigCmd.ExecAsync(d, key, seqno, progress, jdkVersion); retCode != EXEC_FINISHED {
 				d.accessLock.Lock()
 				<-d.ExecChan[key]
 				d.WaitExec[key].Done()
@@ -477,7 +486,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 				Name: "git",
 				Args: []string{"pull", "origin", codeManager.GitConfig.Branch},
 			}
-			if retCode = gitPullCmd.ExecAsync(d, key, seqno, progress); retCode != EXEC_FINISHED {
+			if retCode = gitPullCmd.ExecAsync(d, key, seqno, progress, jdkVersion); retCode != EXEC_FINISHED {
 				d.accessLock.Lock()
 				<-d.ExecChan[key]
 				d.WaitExec[key].Done()
@@ -496,7 +505,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 					Name: "ant",
 					Args: []string{"-f", buildManager.AntConfig.BuildFile, "-D" + buildManager.AntConfig.Properties},
 				}
-				if retCode = antBuildCmd.ExecAsync(d, key, seqno, progress); retCode != EXEC_FINISHED {
+				if retCode = antBuildCmd.ExecAsync(d, key, seqno, progress, jdkVersion); retCode != EXEC_FINISHED {
 					d.accessLock.Lock()
 					<-d.ExecChan[key]
 					d.WaitExec[key].Done()
@@ -511,7 +520,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 					Args: []string{"-f", buildManager.MvnConfig.Pom, buildManager.MvnConfig.Goals},
 				}
 
-				if retCode = mvnBuildCmd.ExecAsync(d, key, seqno, progress); retCode != EXEC_FINISHED {
+				if retCode = mvnBuildCmd.ExecAsync(d, key, seqno, progress, jdkVersion); retCode != EXEC_FINISHED {
 					d.accessLock.Lock()
 					<-d.ExecChan[key]
 					d.WaitExec[key].Done()
@@ -531,7 +540,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 				Name: cmdWithArgs[0],
 				Args: cmdWithArgs[1:],
 			}
-			if retCode = imgBuildCmd.ExecAsync(d, key, seqno, progress); retCode != EXEC_FINISHED {
+			if retCode = imgBuildCmd.ExecAsync(d, key, seqno, progress, jdkVersion); retCode != EXEC_FINISHED {
 				d.accessLock.Lock()
 				<-d.ExecChan[key]
 				d.WaitExec[key].Done()
@@ -550,7 +559,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 				Name: cmdWithArgs[0],
 				Args: cmdWithArgs[1:],
 			}
-			if retCode = imgPushCmd.ExecAsync(d, key, seqno, progress); retCode != EXEC_FINISHED {
+			if retCode = imgPushCmd.ExecAsync(d, key, seqno, progress, jdkVersion); retCode != EXEC_FINISHED {
 				d.accessLock.Lock()
 				<-d.ExecChan[key]
 				d.WaitExec[key].Done()
@@ -681,7 +690,7 @@ func (d *JobManager) killJobExecution(request *restful.Request, response *restfu
 	}
 }
 
-func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) int {
+func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, jdkVersion string) int {
 
 	var recvCode int
 	jobCmd := exec.Command(cmd.Name, cmd.Args...)
@@ -699,6 +708,27 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32) 
 	}
 
 	jobCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	//select jdkVersion
+	if progress == EXEC_CODE_BUILDING {
+
+		var jdkPath string
+		if err := Database.QueryRow("select installpath from jdk where version = ?", jdkVersion).Scan(&jdkPath); err != nil {
+			if err == sql.ErrNoRows {
+				Info("No Result!")
+
+			} else {
+				Info("err occurred when select jdkPath :%s", err)
+			}
+
+		}
+		jobCmd.Env = append(jobCmd.Env, "PATH="+jdkPath+":"+os.Getenv("PATH"))
+		Info("******************************************************")
+		Info("%s", jobCmd.Env)
+		//      Info("%s", os.Environ)
+		Info("*****************************************************")
+
+	}
 	err = jobCmd.Start()
 	if err != nil {
 		Info("err occurred when start executing command: (cmd=%s, agrs=%v): \\n%v\\n", cmd.Name, cmd.Args)
