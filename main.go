@@ -53,19 +53,28 @@ func main() {
 	// Swagger configuration
 	SwaggerPath = props.GetString("swagger.path", "")
 	SheRaIcon = filepath.Join(SwaggerPath, "images/jion.ico")
-	logFileName := props.MustGet("log.path")
+
+	//set the log format and its destination file
+	logFilePath := props.MustGet("log.path")
+	if err = os.MkdirAll(logFilePath, 0755); err != nil {
+		utils.Info("failed to create log file dir\n")
+		os.Exit(1)
+
+	}
+
+	logFileName := logFilePath + "She-Ra.log"
 	logFile, logErr := os.OpenFile(logFileName, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0666)
 	if logErr != nil {
-		log.Println("Fail to find", *logFile, "She-Ra start failed")
+		utils.Info("Fail to find %s\n", logFileName)
 		os.Exit(1)
 
 	} else {
-		log.Println("put log to ", logFileName)
+		utils.Info("put log to %s\n", logFileName)
 	}
 	log.SetOutput(logFile)
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
 
-	// init database
+	// init workspace and database
 	utils.Init(props)
 
 	// New Job Manager
