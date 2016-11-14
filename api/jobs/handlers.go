@@ -112,7 +112,7 @@ func jobExists(key Key, cache *lru.ARCCache) bool {
 	}
 
 	//take further check from the job config file
-	if FileExists(WS_PATH + key.Ns + "/" + key.Id + "/.shera/configfile") {
+	if FileExists(WS_PATH + key.Ns + "/." + key.Id + "/.shera/configfile") {
 		return true
 	}
 
@@ -121,6 +121,7 @@ func jobExists(key Key, cache *lru.ARCCache) bool {
 
 func (d *JobManager) createJob(request *restful.Request, response *restful.Response) {
 	Info("Enter createJob\n")
+	var err error
 	ns := request.PathParameter("namespace")
 	job := configdata.Job{}
 	//waitGroup := new(sync.WaitGroup)
@@ -146,26 +147,42 @@ func (d *JobManager) createJob(request *restful.Request, response *restful.Respo
 	d.SeqNo[key] = 0
 	d.accessLock.Unlock()
 
-	createWorkSpace := &JobCommand{
-		Name: "mkdir",
-		Args: []string{"-p", WS_PATH + key.Ns + "/" + key.Id + "/.shera/" + EXECUTION_PATH},
+	/*
+		createWorkSpace := &JobCommand{
+			Name: "mkdir",
+			Args: []string{"-p", WS_PATH + key.Ns + "/" + key.Id + "/.shera/" + EXECUTION_PATH},
+		}
+		createWorkSpace.Exec()
+	*/
+	err = os.MkdirAll(WS_PATH+key.Ns+"/"+key.Id, 0755)
+	if err != nil {
+		response.AddHeader("Content-Type", "text/plain")
+		response.WriteErrorString(http.StatusInternalServerError, err.Error())
+		return
+
 	}
-	createWorkSpace.Exec()
+	err = os.MkdirAll(WS_PATH+key.Ns+"/."+key.Id+"/.shera/"+EXECUTION_PATH, 0755)
+	if err != nil {
+		response.AddHeader("Content-Type", "text/plain")
+		response.WriteErrorString(http.StatusInternalServerError, err.Error())
+		return
+
+	}
 	//create Dockerfile
-	DockerfilePath := WS_PATH + key.Ns + "/" + key.Id + "/.shera/"
+	DockerfilePath := WS_PATH + key.Ns + "/." + key.Id + "/.shera/"
 	DockerfileName := "Dockerfile"
 	DockerfileContent := job.ImgManager.DockerFileContent
 
 	WriteFile(DockerfilePath, DockerfileName, DockerfileContent)
 
 	//encode job info and store job info into config file
-	if err := WriteData(key, &job); err != nil {
+	if err = WriteData(key, &job); err != nil {
 		response.AddHeader("Content-Type", "text/plain")
 		response.WriteErrorString(http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	if err := InsertJobViewRecord(key.Ns, key.Id); err != nil {
+	if err = InsertJobViewRecord(key.Ns, key.Id); err != nil {
 		response.AddHeader("Content-Type", "text/plain")
 		response.WriteErrorString(http.StatusInternalServerError, err.Error())
 		return
@@ -189,7 +206,7 @@ func (d *JobManager) readJob(request *restful.Request, response *restful.Respons
 		job = value.(configdata.Job)
 		Info("Get job successfully")
 		response.WriteHeaderAndEntity(http.StatusFound, &job)
-	} else if FileExists(WS_PATH + key.Ns + "/" + key.Id + "/.shera/configfile") {
+	} else if FileExists(WS_PATH + key.Ns + "/." + key.Id + "/.shera/configfile") {
 		if err := ReadData(key, &job); err != nil {
 			Info("failed to read job config data")
 			response.WriteHeader(http.StatusNotFound)
@@ -257,11 +274,13 @@ func (d *JobManager) updateJob(request *restful.Request, response *restful.Respo
 		//d.WaitExec[key] = waitGroup
 		d.accessLock.Unlock()
 
-		createWorkSpace := &JobCommand{
-			Name: "mkdir",
-			Args: []string{"-p", WS_PATH + key.Ns + "/" + key.Id + "/.shera/" + EXECUTION_PATH},
+		err = os.MkdirAll(WS_PATH+key.Ns+"/."+key.Id+"/.shera/"+EXECUTION_PATH, 0755)
+		if err != nil {
+			response.AddHeader("Content-Type", "text/plain")
+			response.WriteErrorString(http.StatusInternalServerError, err.Error())
+			return
+
 		}
-		createWorkSpace.Exec()
 
 		//encode job info and store job info into config file
 		if err = WriteData(key, &newJob); err != nil {
@@ -277,6 +296,7 @@ func (d *JobManager) updateJob(request *restful.Request, response *restful.Respo
 }
 
 func (d *JobManager) delJob(request *restful.Request, response *restful.Response) {
+	var err error
 	ns := request.PathParameter("namespace")
 	jobId := request.PathParameter("job-id")
 	key := Key{Ns: ns, Id: jobId}
@@ -296,15 +316,17 @@ func (d *JobManager) delJob(request *restful.Request, response *restful.Response
 
 	DeleteJobExecutions(key.Ns, key.Id)
 
-	cleanupCmd := &JobCommand{
-		Name: "rm",
-		Args: []string{"-rf", WS_PATH + ns + "/" + jobId},
-	}
-
-	success, _ := cleanupCmd.Exec()
-	if !success {
+	err = os.RemoveAll(WS_PATH + ns + "/." + jobId)
+	if err != nil {
 		response.WriteHeader(http.StatusInternalServerError)
 		return
+
+	}
+	err = os.RemoveAll(WS_PATH + ns + "/" + jobId)
+	if err != nil {
+		response.WriteHeader(http.StatusInternalServerError)
+		return
+
 	}
 
 	go func() {
@@ -336,7 +358,7 @@ func (d *JobManager) execJob(request *restful.Request, response *restful.Respons
 	Info("execJob: key.ns=%s, key.id=%s\n", key.Ns, key.Id)
 
 	if !d.JobCache.Contains(key) &&
-		FileExists(WS_PATH+key.Ns+"/"+key.Id+"/.shera/configfile") {
+		FileExists(WS_PATH+key.Ns+"/."+key.Id+"/.shera/configfile") {
 		if err := ReadData(key, &job); err != nil {
 			Info("failed to read job config data")
 			response.WriteHeader(http.StatusNotFound)
@@ -405,9 +427,9 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 		Info("key.Ns=%s, key.Id=%s, seqno=%d begin to execute command", key.Ns, key.Id, seqno)
 
 		//change the working dir
-		targetPath, err := filepath.Abs(WS_PATH + key.Ns + "/" + key.Id)
+		targetPath, err := filepath.Abs(WS_PATH + key.Ns)
 		if err != nil {
-			Info("AbsError (%s): %s\\n", WS_PATH+key.Ns+"/"+key.Id, err)
+			Info("AbsError (%s): %s\\n", WS_PATH+key.Ns, err)
 			goto COMMON_HANDLING
 
 		}
@@ -421,16 +443,23 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 
 		jdkVersion := job.JdkVersion
 
-		fPath := fmt.Sprintf("%s%s/%s/.shera/%s", WS_PATH, key.Ns, key.Id, EXECUTION_PATH)
+		fPath := fmt.Sprintf("%s%s/.%s/.shera/%s", WS_PATH, key.Ns, key.Id, EXECUTION_PATH)
 		lId := strconv.Itoa(int(seqno))
 		//pull code from git
 		if codeManager := job.GetCodeManager(); codeManager != nil && codeManager.GitConfig != nil {
 			Info("key.Ns=%s, key.Id=%s, seqno=%d begin to pulling code\n", key.Ns, key.Id, seqno)
 			progress = EXEC_CODE_PULLING
-			err = os.RemoveAll(WS_PATH + key.Ns + "/" + key.Id + "/.git/")
+			err = os.RemoveAll(WS_PATH + key.Ns + "/" + key.Id)
 			if err != nil {
-				Info("err occurred when remove .git dir: %v", err)
+				Info("err occurred when remove old srouce code: %v", err)
 			}
+
+			err = os.MkdirAll(WS_PATH+key.Ns+"/"+key.Id, 0755)
+			if err != nil {
+				Info("err occurred when create working space: %v", err)
+				goto COMMON_HANDLING
+			}
+
 			gitInitCmd := &JobCommand{
 				Name: "git",
 				Args: []string{"init"},
@@ -555,25 +584,25 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 			if retCode != EXEC_FINISHED {
 				goto COMMON_HANDLING
 			}
+			/*
+				var imgId string
+				getImgNoCmd := JobCommand{
+					Name: "tail",
+					Args: []string{"-n", "1", fPath + lId},
+				}
+				if success, result := getImgNoCmd.Exec(); success {
 
-			var imgId string
-			getImgNoCmd := JobCommand{
-				Name: "tail",
-				Args: []string{"-n", "1", fPath + lId},
-			}
-			if success, result := getImgNoCmd.Exec(); success {
-
-				resultV := strings.Split(result, " ")
-				if len(resultV) != 3 || resultV[0] != "Successfully" {
-					Info("failed to get correct img Id: %s\n", result)
+					resultV := strings.Split(result, " ")
+					if len(resultV) != 3 || resultV[0] != "Successfully" {
+						Info("failed to get correct img Id: %s\n", result)
+						goto COMMON_HANDLING
+					}
+					imgId = strings.Replace(resultV[2], "\n", "", 1)
+				} else {
 					goto COMMON_HANDLING
 				}
-				imgId = strings.Replace(resultV[2], "\n", "", 1)
-			} else {
-				goto COMMON_HANDLING
-			}
-			Info("Image Id=%s", imgId)
-
+				Info("Image Id=%s", imgId)
+			*/
 			progress = EXEC_IMAGE_PUSHING
 			imgPushCmd := JobCommand{
 				Name: "docker",
@@ -593,24 +622,25 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 				goto COMMON_HANDLING
 			}
 
-			//sql := "insert into image (create_time,creator,image_id,image_type,name,remark,resource_name,version,is_base_image,is_delete) values (" + "\"" + strings.Replace((strings.Split(time.Now().Format(time.RFC3339), "+"))[0], "T", " ", 1) + "\",1,\"" + imgId + "\",1,\"She-Ra/" + imgManager.ImgName + "\",\"She-Ra\",\"" + imgManager.ImgName + ".war" + "\",\"" + imgBuildTime + "\",2,0);"
-			sql := fmt.Sprintf("insert into image (create_time,creator,image_id,image_type,name,remark,resource_name,version,is_base_image,is_delete) values ('%s', 1, '%s', 1, '%s','She-Ra','%s','%s',2,0)",
-				strings.Replace((strings.Split(time.Now().Format(time.RFC3339), "+"))[0], "T", " ", 1),
-				imgId, "She-Ra/"+imgManager.ImgName, imgManager.ImgName+".war", imgBuildTime)
-			Info("%s\n", sql)
-			writeDBCmd := JobCommand{
-				Name: "bash",
-				Args: []string{
-					"-c",
-					"echo " + "\"" + sql + "\"" + " | mysql -h" + IMG_HOST + " -u" + IMG_USER + " -p" + IMG_PASSWD + " " + IMG_DBNAME,
-				},
-			}
+			/*
+				sql := fmt.Sprintf("insert into image (create_time,creator,image_id,image_type,name,remark,resource_name,version,is_base_image,is_delete) values ('%s', 1, '%s', 1, '%s','She-Ra','%s','%s',2,0)",
+					strings.Replace((strings.Split(time.Now().Format(time.RFC3339), "+"))[0], "T", " ", 1),
+					imgId, "She-Ra/"+imgManager.ImgName, imgManager.ImgName+".war", imgBuildTime)
+				Info("%s\n", sql)
+				writeDBCmd := JobCommand{
+					Name: "bash",
+					Args: []string{
+						"-c",
+						"echo " + "\"" + sql + "\"" + " | mysql -h" + IMG_HOST + " -u" + IMG_USER + " -p" + IMG_PASSWD + " " + IMG_DBNAME,
+					},
+				}
 
-			Info("writeDBCmd is %v\n", writeDBCmd)
-			retCode = writeDBCmd.ExecAsync(d, key, seqno, progress, jdkVersion)
-			if retCode != EXEC_FINISHED {
-				goto COMMON_HANDLING
-			}
+				Info("writeDBCmd is %v\n", writeDBCmd)
+				retCode = writeDBCmd.ExecAsync(d, key, seqno, progress, jdkVersion)
+				if retCode != EXEC_FINISHED {
+					goto COMMON_HANDLING
+				}
+			*/
 
 		}
 
@@ -741,7 +771,7 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, 
 
 	var recvCode int
 	jobCmd := exec.Command(cmd.Name, cmd.Args...)
-	timeout := time.Duration(300 * time.Second)
+	timeout := time.Duration(600 * time.Second)
 
 	stdout, err := jobCmd.StdoutPipe()
 	if err != nil {
@@ -794,7 +824,7 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, 
 			StartTime: 0,
 			EndTime:   time.Now().Unix(),
 		}
-		fPath := fmt.Sprintf("%s%s/%s/.shera/%s", WS_PATH, key.Ns, key.Id, EXECUTION_PATH)
+		fPath := fmt.Sprintf("%s%s/.%s/.shera/%s", WS_PATH, key.Ns, key.Id, EXECUTION_PATH)
 		lId := strconv.Itoa(int(seqno))
 		fline := fmt.Sprintf("\nFailed in %d. \n", progress)
 		WriteFile(fPath, lId, fline)
@@ -810,7 +840,7 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, 
 	done := make(chan error)
 	go func(key Key, number int, progress int, stdout io.ReadCloser, errout io.ReadCloser) {
 
-		fPath := fmt.Sprintf("%s%s/%s/.shera/%s", WS_PATH, key.Ns, key.Id, EXECUTION_PATH)
+		fPath := fmt.Sprintf("%s%s/.%s/.shera/%s", WS_PATH, key.Ns, key.Id, EXECUTION_PATH)
 		lId := strconv.Itoa(number)
 		//Info("waiting for command to finish.")
 		reader := bufio.NewReader(stdout)
@@ -842,7 +872,7 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, 
 				Info("begin to kill the execution command\n")
 				pgid, err := syscall.Getpgid(jobCmd.Process.Pid)
 				if err == nil {
-					syscall.Kill(-pgid, syscall.SIGTERM)
+					syscall.Kill(-pgid, syscall.SIGKILL)
 				}
 				Info("kill the execution command successfully\n")
 				jobExec := &Execution{
@@ -900,7 +930,7 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, 
 				}
 				UpdateExecutionRecord(jobExec)
 				UpdateJobViewStatus(jobExec.Namespace, jobExec.JobId, jobExec.EndTime, jobExec.EndStatus)
-				fPath := fmt.Sprintf("%s%s/%s/.shera/%s", WS_PATH, key.Ns, key.Id, EXECUTION_PATH)
+				fPath := fmt.Sprintf("%s%s/.%s/.shera/%s", WS_PATH, key.Ns, key.Id, EXECUTION_PATH)
 				lId := strconv.Itoa(int(seqno))
 				fline := fmt.Sprintf("\nFailed in %d. \n", progress)
 				WriteFile(fPath, lId, fline)
@@ -962,7 +992,7 @@ func (d *JobManager) Log(ws *websocket.Conn) {
 			} else {
 				boolean = true
 			}
-			fName := fmt.Sprintf("%s%s/%s/.shera/%s%s", WS_PATH, data.NameSpace, data.JobId, EXECUTION_PATH, data.SeqNo)
+			fName := fmt.Sprintf("%s%s/.%s/.shera/%s%s", WS_PATH, data.NameSpace, data.JobId, EXECUTION_PATH, data.SeqNo)
 			seqno, err := strconv.Atoi(data.SeqNo)
 			if err != nil {
 				Info("----convent seqno to string failed: %v\n", err)

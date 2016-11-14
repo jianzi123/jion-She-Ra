@@ -120,10 +120,10 @@ func Init(props *properties.Properties) {
 	}
 
 	//get docker related provision info
-	IMG_USER = props.MustGet("img.user")
-	IMG_HOST = props.MustGet("img.host")
-	IMG_DBNAME = props.MustGet("img.dbname")
-	IMG_PASSWD = props.MustGet("img.passwd")
+	//IMG_USER = props.MustGet("img.user")
+	//IMG_HOST = props.MustGet("img.host")
+	//IMG_DBNAME = props.MustGet("img.dbname")
+	//IMG_PASSWD = props.MustGet("img.passwd")
 	IMG_REGISTRY = props.MustGet("img.registry")
 
 	dbPath := props.MustGet("database.path")
