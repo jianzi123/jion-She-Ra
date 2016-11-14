@@ -41,7 +41,7 @@ type JobCommand struct {
 	Args []string
 }
 
-func (cmd *JobCommand) Exec() bool {
+func (cmd *JobCommand) Exec() (bool, string) {
 	var (
 		cmdOut []byte
 		err    error
@@ -49,11 +49,11 @@ func (cmd *JobCommand) Exec() bool {
 
 	if cmdOut, err = exec.Command(cmd.Name, cmd.Args...).Output(); err != nil {
 		Info("Failed to execute command: (cmd=%s, agrs=%v): \\n%v\\n", cmd.Name, cmd.Args)
-		return false
+		return false, ""
 	}
 
 	Info("Output (cmd=%s, agrs=%v): \\n%v\\n", cmd.Name, cmd.Args, string(cmdOut))
-	return true
+	return true, string(cmdOut)
 }
 
 func (cmd *JobCommand) ExecPipeCmd(in *JobCommand) int {
@@ -132,7 +132,6 @@ func (d *JobManager) createJob(request *restful.Request, response *restful.Respo
 
 	job.MaxKeepDays = MAX_KEEP_DAYS
 	job.MaxExecutionRecords = MAX_EXEC_NUM
-	job.CurrentNumber = 0
 
 	key := Key{Ns: ns, Id: job.Id}
 	if jobExists(key, d.JobCache) {
@@ -155,7 +154,7 @@ func (d *JobManager) createJob(request *restful.Request, response *restful.Respo
 	//create Dockerfile
 	DockerfilePath := WS_PATH + key.Ns + "/" + key.Id + "/.shera/"
 	DockerfileName := "Dockerfile"
-	DockerfileContent := job.DockerfileContent
+	DockerfileContent := job.ImgManager.DockerFileContent
 
 	WriteFile(DockerfilePath, DockerfileName, DockerfileContent)
 
@@ -302,7 +301,7 @@ func (d *JobManager) delJob(request *restful.Request, response *restful.Response
 		Args: []string{"-rf", WS_PATH + ns + "/" + jobId},
 	}
 
-	success := cleanupCmd.Exec()
+	success, _ := cleanupCmd.Exec()
 	if !success {
 		response.WriteHeader(http.StatusInternalServerError)
 		return
@@ -397,12 +396,8 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 	Info("runJobExecution key.Ns=%s, key.Id=%s, seqno=%d\n", key.Ns, key.Id, seqno)
 	if value, OK := d.JobCache.Get(key); OK {
 		if cancelStat := GetCancelStatus(key.Ns, key.Id, seqno); cancelStat == EXEC_CANCELLED {
-			d.accessLock.Lock()
-			<-d.ExecChan[key]
-			d.WaitExec[key].Done()
-			d.accessLock.Unlock()
 			Info("GetCancelStatus key.Ns=%s, key.Id=%s, seqno=%d cancelled\n", key.Ns, key.Id, seqno)
-			return
+			goto COMMON_HANDLING
 		}
 
 		job := value.(configdata.Job)
@@ -412,62 +407,36 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 		//change the working dir
 		targetPath, err := filepath.Abs(WS_PATH + key.Ns + "/" + key.Id)
 		if err != nil {
-			d.accessLock.Lock()
-			<-d.ExecChan[key]
-			d.WaitExec[key].Done()
-			d.accessLock.Unlock()
-			log.Fatalf("AbsError (%s): %s\\n", WS_PATH+key.Ns+"/"+key.Id, err)
+			Info("AbsError (%s): %s\\n", WS_PATH+key.Ns+"/"+key.Id, err)
+			goto COMMON_HANDLING
 
-			return
 		}
 
 		Info("Target Path: %s\\n", targetPath)
 		err = os.Chdir(targetPath)
 		if err != nil {
-			d.accessLock.Lock()
-			<-d.ExecChan[key]
-			d.WaitExec[key].Done()
-			d.accessLock.Unlock()
 			Info("ChdirError (%s): %s\\n", targetPath, err)
-			return
+			goto COMMON_HANDLING
 		}
-		/*
-			//select correct jdk version
-			switchJdkCmd := &JobCommand{
-				Name: "bash",
-				Args: []string{"-c", "echo 1 | alternatives --config java"},
-			}
 
-			if job.JdkVersion == "jdk1.7" {
-				switchJdkCmd.Args = []string{"-c", "echo 2 | alternatives --config java"}
-			}
-
-			if retCode = switchJdkCmd.ExecAsync(d, key, seqno, EXEC_INIT); retCode != EXEC_FINISHED {
-				d.accessLock.Lock()
-				<-d.ExecChan[key]
-				d.WaitExec[key].Done()
-				d.accessLock.Unlock()
-				return
-			}
-		*/
 		jdkVersion := job.JdkVersion
 
-		fPath := fmt.Sprintf("/workspace/%s/%s/.shera/executions/", key.Ns, key.Id)
+		fPath := fmt.Sprintf("%s%s/%s/.shera/%s", WS_PATH, key.Ns, key.Id, EXECUTION_PATH)
 		lId := strconv.Itoa(int(seqno))
 		//pull code from git
 		if codeManager := job.GetCodeManager(); codeManager != nil && codeManager.GitConfig != nil {
 			Info("key.Ns=%s, key.Id=%s, seqno=%d begin to pulling code\n", key.Ns, key.Id, seqno)
 			progress = EXEC_CODE_PULLING
+			err = os.RemoveAll(WS_PATH + key.Ns + "/" + key.Id + "/.git/")
+			if err != nil {
+				Info("err occurred when remove .git dir: %v", err)
+			}
 			gitInitCmd := &JobCommand{
 				Name: "git",
 				Args: []string{"init"},
 			}
 			if retCode = gitInitCmd.ExecAsync(d, key, seqno, progress, jdkVersion); retCode != EXEC_FINISHED {
-				d.accessLock.Lock()
-				<-d.ExecChan[key]
-				d.WaitExec[key].Done()
-				d.accessLock.Unlock()
-				return
+				goto COMMON_HANDLING
 			}
 
 			gitConfigCmd := &JobCommand{
@@ -475,11 +444,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 				Args: []string{"config", "remote.origin.url", codeManager.GitConfig.Repo.Url},
 			}
 			if retCode = gitConfigCmd.ExecAsync(d, key, seqno, progress, jdkVersion); retCode != EXEC_FINISHED {
-				d.accessLock.Lock()
-				<-d.ExecChan[key]
-				d.WaitExec[key].Done()
-				d.accessLock.Unlock()
-				return
+				goto COMMON_HANDLING
 			}
 
 			gitPullCmd := &JobCommand{
@@ -487,11 +452,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 				Args: []string{"pull", "origin", codeManager.GitConfig.Branch},
 			}
 			if retCode = gitPullCmd.ExecAsync(d, key, seqno, progress, jdkVersion); retCode != EXEC_FINISHED {
-				d.accessLock.Lock()
-				<-d.ExecChan[key]
-				d.WaitExec[key].Done()
-				d.accessLock.Unlock()
-				return
+				goto COMMON_HANDLING
 			}
 			// add job step finish to db and write to file.
 			fline := fmt.Sprintf("\n step %d finished. \n", progress)
@@ -500,76 +461,159 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 
 		if buildManager := job.GetBuildManager(); buildManager != nil {
 			progress = EXEC_CODE_BUILDING
-			if buildManager.AntConfig != nil {
-				antBuildCmd := &JobCommand{
-					Name: "ant",
-					Args: []string{"-f", buildManager.AntConfig.BuildFile, "-D" + buildManager.AntConfig.Properties},
-				}
-				if retCode = antBuildCmd.ExecAsync(d, key, seqno, progress, jdkVersion); retCode != EXEC_FINISHED {
-					d.accessLock.Lock()
-					<-d.ExecChan[key]
-					d.WaitExec[key].Done()
-					d.accessLock.Unlock()
-					return
+			var i, j, k int
+			for _, v := range buildManager.SeqNo {
+				switch v {
+				case configdata.BuildManager_NONE:
+					Info("Bad BuildManager data\n")
+					goto COMMON_HANDLING
+
+				case configdata.BuildManager_ANT:
+					if buildManager.AntConfig[i] == nil {
+						Info("Bad BuildManager data\n")
+						goto COMMON_HANDLING
+
+					} else {
+						antBuildCmd := &JobCommand{
+							Name: "ant",
+							Args: []string{"-f", buildManager.AntConfig[i].BuildFile, "-D" + buildManager.AntConfig[i].Properties},
+						}
+						retCode = antBuildCmd.ExecAsync(d, key, seqno, progress, jdkVersion)
+						if retCode != EXEC_FINISHED {
+							goto COMMON_HANDLING
+
+						}
+						i++
+					}
+				case configdata.BuildManager_MVN:
+					if buildManager.MvnConfig[j] == nil {
+						Info("Bad BuildManager data\n")
+						goto COMMON_HANDLING
+
+					} else {
+						mvnBuildCmd := &JobCommand{
+							Name: "mvn",
+							Args: []string{"-f", buildManager.MvnConfig[j].Pom, buildManager.MvnConfig[j].Goals},
+						}
+
+						retCode = mvnBuildCmd.ExecAsync(d, key, seqno, progress, jdkVersion)
+						if retCode != EXEC_FINISHED {
+
+							goto COMMON_HANDLING
+						}
+						j++
+
+					}
+				case configdata.BuildManager_SHELL:
+					if buildManager.Cmd[k] == "" {
+						Info("Bad BuildManager data\n")
+						goto COMMON_HANDLING
+
+					} else {
+						Info("In build manager: %s\n", buildManager.Cmd[k])
+						cmdWithArgs := strings.Split(buildManager.Cmd[k], " ")
+						shellCmd := &JobCommand{
+							Name: cmdWithArgs[0],
+							Args: cmdWithArgs[1:],
+						}
+						retCode = shellCmd.ExecAsync(d, key, seqno, progress, jdkVersion)
+						if retCode != EXEC_FINISHED {
+							goto COMMON_HANDLING
+
+						}
+						k++
+
+					}
+				default:
+					goto COMMON_HANDLING
 				}
 			}
 
-			if buildManager.MvnConfig != nil {
-				mvnBuildCmd := &JobCommand{
-					Name: "mvn",
-					Args: []string{"-f", buildManager.MvnConfig.Pom, buildManager.MvnConfig.Goals},
-				}
-
-				if retCode = mvnBuildCmd.ExecAsync(d, key, seqno, progress, jdkVersion); retCode != EXEC_FINISHED {
-					d.accessLock.Lock()
-					<-d.ExecChan[key]
-					d.WaitExec[key].Done()
-					d.accessLock.Unlock()
-					return
-				}
-			}
 			// add job step finish to db and write to file.
 			fline := fmt.Sprintf("\n step %d finished. \n", progress)
 			WriteFile(fPath, lId, fline)
 		}
 
-		if job.BuildImgCmd != "" {
+		if imgManager := job.GetImgManager(); imgManager != nil {
 			progress = EXEC_IMAGE_BUILDING
-			cmdWithArgs := strings.Split(job.BuildImgCmd, " ")
+			imgBuildTime := strings.Replace(strings.ToLower((strings.Split(time.Now().Format(time.RFC3339), "+"))[0]), ":", "-", 2)
+			tag := IMG_REGISTRY + "/she-ra/" + imgManager.ImgName + ":" + imgBuildTime
+			Info("%s\n", tag)
 			imgBuildCmd := &JobCommand{
-				Name: cmdWithArgs[0],
-				Args: cmdWithArgs[1:],
+				Name: "docker",
+				Args: []string{
+					"build",
+					"-t",
+					tag,
+					"-f",
+					imgManager.DockerFile,
+					".",
+				},
 			}
-			if retCode = imgBuildCmd.ExecAsync(d, key, seqno, progress, jdkVersion); retCode != EXEC_FINISHED {
-				d.accessLock.Lock()
-				<-d.ExecChan[key]
-				d.WaitExec[key].Done()
-				d.accessLock.Unlock()
-				return
+
+			retCode = imgBuildCmd.ExecAsync(d, key, seqno, progress, jdkVersion)
+			if retCode != EXEC_FINISHED {
+				goto COMMON_HANDLING
 			}
-			// add job step finish to db and write to file.
-			fline := fmt.Sprintf("\n step %d finished. \n", progress)
-			WriteFile(fPath, lId, fline)
+
+			var imgId string
+			getImgNoCmd := JobCommand{
+				Name: "tail",
+				Args: []string{"-n", "1", fPath + lId},
+			}
+			if success, result := getImgNoCmd.Exec(); success {
+
+				resultV := strings.Split(result, " ")
+				if len(resultV) != 3 || resultV[0] != "Successfully" {
+					Info("failed to get correct img Id: %s\n", result)
+					goto COMMON_HANDLING
+				}
+				imgId = strings.Replace(resultV[2], "\n", "", 1)
+			} else {
+				goto COMMON_HANDLING
+			}
+			Info("Image Id=%s", imgId)
+
+			progress = EXEC_IMAGE_PUSHING
+			imgPushCmd := JobCommand{
+				Name: "docker",
+				Args: []string{"push", tag},
+			}
+			retCode = imgPushCmd.ExecAsync(d, key, seqno, progress, jdkVersion)
+			if retCode != EXEC_FINISHED {
+				goto COMMON_HANDLING
+			}
+
+			imgRemoveCmd := JobCommand{
+				Name: "docker",
+				Args: []string{"rmi", tag},
+			}
+			retCode = imgRemoveCmd.ExecAsync(d, key, seqno, progress, jdkVersion)
+			if retCode != EXEC_FINISHED {
+				goto COMMON_HANDLING
+			}
+
+			//sql := "insert into image (create_time,creator,image_id,image_type,name,remark,resource_name,version,is_base_image,is_delete) values (" + "\"" + strings.Replace((strings.Split(time.Now().Format(time.RFC3339), "+"))[0], "T", " ", 1) + "\",1,\"" + imgId + "\",1,\"She-Ra/" + imgManager.ImgName + "\",\"She-Ra\",\"" + imgManager.ImgName + ".war" + "\",\"" + imgBuildTime + "\",2,0);"
+			sql := fmt.Sprintf("insert into image (create_time,creator,image_id,image_type,name,remark,resource_name,version,is_base_image,is_delete) values ('%s', 1, '%s', 1, '%s','She-Ra','%s','%s',2,0)",
+				strings.Replace((strings.Split(time.Now().Format(time.RFC3339), "+"))[0], "T", " ", 1),
+				imgId, "She-Ra/"+imgManager.ImgName, imgManager.ImgName+".war", imgBuildTime)
+			Info("%s\n", sql)
+			writeDBCmd := JobCommand{
+				Name: "bash",
+				Args: []string{
+					"-c",
+					"echo " + "\"" + sql + "\"" + " | mysql -h" + IMG_HOST + " -u" + IMG_USER + " -p" + IMG_PASSWD + " " + IMG_DBNAME,
+				},
+			}
+
+			Info("writeDBCmd is %v\n", writeDBCmd)
+			retCode = writeDBCmd.ExecAsync(d, key, seqno, progress, jdkVersion)
+			if retCode != EXEC_FINISHED {
+				goto COMMON_HANDLING
+			}
+
 		}
 
-		if job.PushImgCmd != "" {
-			progress = EXEC_IMAGE_PUSHING
-			cmdWithArgs := strings.Split(job.PushImgCmd, " ")
-			imgPushCmd := &JobCommand{
-				Name: cmdWithArgs[0],
-				Args: cmdWithArgs[1:],
-			}
-			if retCode = imgPushCmd.ExecAsync(d, key, seqno, progress, jdkVersion); retCode != EXEC_FINISHED {
-				d.accessLock.Lock()
-				<-d.ExecChan[key]
-				d.WaitExec[key].Done()
-				d.accessLock.Unlock()
-				return
-			}
-			// add job step finish to db and write to file.
-			fline := fmt.Sprintf("\n step %d finished. \n", progress)
-			WriteFile(fPath, lId, fline)
-		}
 		jobExec := &Execution{
 			Namespace: key.Ns,
 			JobId:     key.Id,
@@ -583,15 +627,18 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 		}
 		UpdateExecutionRecord(jobExec)
 		UpdateJobViewStatus(jobExec.Namespace, jobExec.JobId, jobExec.EndTime, jobExec.EndStatus)
-		d.accessLock.Lock()
-		<-d.ExecChan[key]
-		d.WaitExec[key].Done()
-		d.accessLock.Unlock()
 		if err := os.Chmod(fPath+lId, 0777); err != nil {
 			Info("job finished normally, when changing mode %v\n", err)
 		}
 
 	}
+
+COMMON_HANDLING:
+	d.accessLock.Lock()
+	<-d.ExecChan[key]
+	d.WaitExec[key].Done()
+	d.accessLock.Unlock()
+	return
 }
 
 //watch one job execution status change
@@ -694,6 +741,7 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, 
 
 	var recvCode int
 	jobCmd := exec.Command(cmd.Name, cmd.Args...)
+	timeout := time.Duration(300 * time.Second)
 
 	stdout, err := jobCmd.StdoutPipe()
 	if err != nil {
@@ -710,16 +758,18 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, 
 	jobCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	//select jdkVersion
-	if progress == EXEC_CODE_BUILDING {
+	if progress == EXEC_CODE_BUILDING && jdkVersion != "" {
 
 		var jdkPath string
-		if err := Database.QueryRow("select installpath from jdk where version = ?", jdkVersion).Scan(&jdkPath); err != nil {
+		err := Database.QueryRow("select installpath from jdk where version = ?", jdkVersion).Scan(&jdkPath)
+		if err != nil {
 			if err == sql.ErrNoRows {
 				Info("No Result!")
 
 			} else {
 				Info("err occurred when select jdkPath :%s", err)
 			}
+			return EXEC_ERROR
 
 		}
 		jobCmd.Env = append(jobCmd.Env, "PATH="+jdkPath+":"+os.Getenv("PATH"))
@@ -729,6 +779,7 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, 
 		Info("*****************************************************")
 
 	}
+
 	err = jobCmd.Start()
 	if err != nil {
 		Info("err occurred when start executing command: (cmd=%s, agrs=%v): \\n%v\\n", cmd.Name, cmd.Args)
@@ -743,7 +794,7 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, 
 			StartTime: 0,
 			EndTime:   time.Now().Unix(),
 		}
-		fPath := fmt.Sprintf("/workspace/%s/%s/.shera/executions/", key.Ns, key.Id)
+		fPath := fmt.Sprintf("%s%s/%s/.shera/%s", WS_PATH, key.Ns, key.Id, EXECUTION_PATH)
 		lId := strconv.Itoa(int(seqno))
 		fline := fmt.Sprintf("\nFailed in %d. \n", progress)
 		WriteFile(fPath, lId, fline)
@@ -759,7 +810,7 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, 
 	done := make(chan error)
 	go func(key Key, number int, progress int, stdout io.ReadCloser, errout io.ReadCloser) {
 
-		fPath := fmt.Sprintf("/workspace/%s/%s/.shera/executions/", key.Ns, key.Id)
+		fPath := fmt.Sprintf("%s%s/%s/.shera/%s", WS_PATH, key.Ns, key.Id, EXECUTION_PATH)
 		lId := strconv.Itoa(number)
 		//Info("waiting for command to finish.")
 		reader := bufio.NewReader(stdout)
@@ -811,6 +862,28 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, 
 			}
 			break
 
+		case <-time.After(timeout):
+			Info(" timeout when executing the command:%v\n", cmd)
+			pgid, err := syscall.Getpgid(jobCmd.Process.Pid)
+			if err == nil {
+				syscall.Kill(-pgid, syscall.SIGKILL)
+			}
+			Info("kill the execution command successfully\n")
+			jobExec := &Execution{
+				Namespace: key.Ns,
+				JobId:     key.Id,
+				SeqNo:     seqno,
+				Progress:  progress,
+				EndStatus: EXEC_FAILURE,
+				Finished:  EXEC_DONE,
+				Cancelled: EXEC_TIMEOUT,
+				StartTime: 0,
+				EndTime:   time.Now().Unix(),
+			}
+			UpdateExecutionRecord(jobExec)
+			UpdateJobViewStatus(jobExec.Namespace, jobExec.JobId, jobExec.EndTime, jobExec.EndStatus)
+			return int(EXEC_TIMEOUT)
+
 		case err = <-done:
 			if err != nil {
 				Info("process done with error = %v\n", err)
@@ -827,7 +900,7 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, 
 				}
 				UpdateExecutionRecord(jobExec)
 				UpdateJobViewStatus(jobExec.Namespace, jobExec.JobId, jobExec.EndTime, jobExec.EndStatus)
-				fPath := fmt.Sprintf("/workspace/%s/%s/.shera/executions/", key.Ns, key.Id)
+				fPath := fmt.Sprintf("%s%s/%s/.shera/%s", WS_PATH, key.Ns, key.Id, EXECUTION_PATH)
 				lId := strconv.Itoa(int(seqno))
 				fline := fmt.Sprintf("\nFailed in %d. \n", progress)
 				WriteFile(fPath, lId, fline)
@@ -889,7 +962,7 @@ func (d *JobManager) Log(ws *websocket.Conn) {
 			} else {
 				boolean = true
 			}
-			fName := fmt.Sprintf("/workspace/%s/%s/.shera/executions/%s", data.NameSpace, data.JobId, data.SeqNo)
+			fName := fmt.Sprintf("%s%s/%s/.shera/%s%s", WS_PATH, data.NameSpace, data.JobId, EXECUTION_PATH, data.SeqNo)
 			seqno, err := strconv.Atoi(data.SeqNo)
 			if err != nil {
 				Info("----convent seqno to string failed: %v\n", err)

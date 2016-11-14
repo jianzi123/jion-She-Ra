@@ -106,6 +106,7 @@ const (
 const (
 	EXEC_NOT_CANCELLED int32 = 0
 	EXEC_CANCELLED     int32 = 1
+	EXEC_TIMEOUT       int32 = 2
 )
 
 func Init(props *properties.Properties) {

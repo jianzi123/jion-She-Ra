@@ -3,17 +3,18 @@ package configdata;
 
 message Job {
 	string	id = 1;
-	string 	nextExecTime = 2;
-	string 	jdkVersion = 3;
-	string 	buildImgCmd = 4;
-	string 	pushImgCmd = 5;
-    string  dockerfileContent = 6;
-	int32 	currentNumber = 7;
-	int32 	maxExecutionRecords = 8;
-	int32 	maxKeepDays = 9;
-        int32   jobRemoved = 10;
-	CodeManager codeManager = 11;
-	BuildManager buildManager = 12;
+	string 	jdkVersion = 2;
+	int32 	maxExecutionRecords = 4;
+	int32 	maxKeepDays = 5;
+	CodeManager codeManager = 6;
+	BuildManager buildManager = 7;
+    ImgManager imgManager = 8;
+}
+
+message ImgManager {
+    string dockerFileContent = 1;
+    string dockerFile = 2;
+    string imgName = 3;
 }
 
 message CodeManager {
@@ -30,10 +31,12 @@ message BuildManager {
 		NONE = 0;	
 		ANT = 1;
 		MVN = 2;
+        SHELL = 3;
 	}
-	Kind select = 1;
-	Ant antConfig = 2;
-	Maven mvnConfig = 3;
+    repeated Kind seqNo = 1;
+    repeated string cmd  = 2;
+	repeated Ant antConfig = 3;
+	repeated Maven mvnConfig = 4;
 }
 
 message Git {
