@@ -147,7 +147,7 @@ func Init(props *properties.Properties) {
 	}
 
 	//create job display info table
-	sql = `Create table IF NOT EXISTS jobView(namespace CHAR(100) NOT NULL, jobId CHAR(100) NOT NULL,status integer, startTime integer, endTime integer, lastSuccessTime integer, lastFailureTime integer, PRIMARY KEY(namespace, jobId))`
+	sql = `Create table IF NOT EXISTS jobView(namespace CHAR(100) NOT NULL, jobId CHAR(100) NOT NULL,status integer, startTime integer, endTime integer, lastSuccessTime integer, lastFailureTime integer, git CHAR(100) NOT NULL, branch CHAR(100) NOT NULL, hookTime integer, hookid integer, PRIMARY KEY(namespace, jobId))`
 	if _, err = Database.Exec(sql); err != nil {
 		Info("failed to create table jobView")
 		os.Exit(1)
@@ -162,11 +162,11 @@ func Init(props *properties.Properties) {
 }
 
 func InsertJobViewRecord(namespace, jobId string) error {
-	if stmt, err := Database.Prepare("insert into jobView(namespace, jobId, status, startTime, endTime, lastSuccessTime, lastFailureTime) values (?,?,?,?,?,?,?)"); err != nil {
+	if stmt, err := Database.Prepare("insert into jobView(namespace, jobId, status, startTime, endTime, lastSuccessTime, lastFailureTime, git, branch, hookTime, hookid) values (?,?,?,?,?,?,?,?,?,?,?)"); err != nil {
 		Info("failed to prepare insert sql:%v\n", err)
 		return err
 
-	} else if _, err := stmt.Exec(namespace, jobId, EXEC_NONE, 0, 0, 0, 0); err != nil {
+	} else if _, err := stmt.Exec(namespace, jobId, EXEC_NONE, 0, 0, 0, 0, "", "", 0, 0); err != nil {
 		Info("failed to insert data into database:%v\n", err)
 		return err
 	}
@@ -553,7 +553,7 @@ func WriteFile(path string, name string, content string) (int, error) {
 	return len, err
 }
 
-func checkFile(fName string) (bool, error) {
+func CheckFmode(fName string) (bool, error) {
 	fInfo, err := os.Stat(fName)
 	if err != nil {
 		return false, err
