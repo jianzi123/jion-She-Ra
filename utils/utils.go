@@ -174,6 +174,19 @@ func InsertJobViewRecord(namespace, jobId string) error {
 	return nil
 }
 
+func DelJobViewRecord(namespace, jobId string) error {
+	if stmt, err := Database.Prepare("delete from jobView where namespace = ? and jobId = ?;"); err != nil {
+		Info("failed to prepare delete sql:%v\n", err)
+		return err
+
+	} else if _, err := stmt.Exec(namespace, jobId); err != nil {
+		Info("failed to insert data into database:%v\n", err)
+		return err
+	}
+
+	return nil
+}
+
 func UpdateJobViewStartTime(namespace, jobId string, startTime int64) {
 	if stmt, err := Database.Prepare("update jobView set startTime = ? where namespace = ? and jobId = ?"); err != nil {
 		Info("failed to prepare update sql:%v\n", err)
@@ -392,7 +405,7 @@ func Contains(key Key) bool {
 }
 
 func ReadData(key Key, job *configdata.Job) error {
-	fileName := WS_PATH + key.Ns + "/" + key.Id + "/.shera/configfile"
+	fileName := WS_PATH + key.Ns + "/." + key.Id + "/.shera/configfile"
 	data, err := ioutil.ReadFile(fileName)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -424,7 +437,7 @@ func WriteData(key Key, job *configdata.Job) error {
 	}
 
 	Info("proto marshal: job", string(data))
-	fileName := WS_PATH + key.Ns + "/" + key.Id + "/.shera/configfile"
+	fileName := WS_PATH + key.Ns + "/." + key.Id + "/.shera/configfile"
 
 	if file, err = os.OpenFile(fileName, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0666); err != nil {
 		log.Fatalf("[She-Ra][error] failed to open file:%v\n", err)

@@ -312,9 +312,18 @@ func (d *JobManager) delJob(request *restful.Request, response *restful.Response
 	}()
 
 	//wait until all the running executions exit
-	d.WaitExec[key].Wait()
+	if _, OK := d.WaitExec[key]; OK {
+		//d.WaitExec[key] = new(sync.WaitGroup)
+		d.WaitExec[key].Wait()
+	}
 
 	DeleteJobExecutions(key.Ns, key.Id)
+	err = DelJobViewRecord(key.Ns, key.Id)
+	if err != nil {
+		response.WriteHeader(http.StatusInternalServerError)
+		return
+
+	}
 
 	err = os.RemoveAll(WS_PATH + ns + "/." + jobId)
 	if err != nil {
@@ -339,7 +348,9 @@ func (d *JobManager) delJob(request *restful.Request, response *restful.Response
 	d.accessLock.Lock()
 	Info("delJob:get access lock successfully")
 	close(d.KillExecChan[key])
-	close(d.ExecChan[key])
+	if _, OK := d.ExecChan[key]; OK {
+		close(d.ExecChan[key])
+	}
 	delete(d.SeqNo, key)
 	delete(d.ExecChan, key)
 	delete(d.KillExecChan, key)
@@ -459,6 +470,19 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 				Info("err occurred when create working space: %v", err)
 				goto COMMON_HANDLING
 			}
+			targetPath, err = filepath.Abs(WS_PATH + key.Ns + "/" + key.Id)
+			if err != nil {
+				Info("AbsError (%s): %s\\n", WS_PATH+key.Ns+"/"+key.Id, err)
+				goto COMMON_HANDLING
+
+			}
+
+			Info("Target Path: %s\\n", targetPath)
+			err = os.Chdir(targetPath)
+			if err != nil {
+				Info("ChdirError (%s): %s\\n", targetPath, err)
+				goto COMMON_HANDLING
+			}
 
 			gitInitCmd := &JobCommand{
 				Name: "git",
@@ -490,6 +514,20 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 
 		if buildManager := job.GetBuildManager(); buildManager != nil {
 			progress = EXEC_CODE_BUILDING
+			targetPath, err = filepath.Abs(WS_PATH + key.Ns + "/" + key.Id)
+			if err != nil {
+				Info("AbsError (%s): %s\\n", WS_PATH+key.Ns+"/"+key.Id, err)
+				goto COMMON_HANDLING
+
+			}
+
+			Info("Target Path: %s\\n", targetPath)
+			err = os.Chdir(targetPath)
+			if err != nil {
+				Info("ChdirError (%s): %s\\n", targetPath, err)
+				goto COMMON_HANDLING
+			}
+
 			var i, j, k int
 			for _, v := range buildManager.SeqNo {
 				switch v {
@@ -565,6 +603,20 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 
 		if imgManager := job.GetImgManager(); imgManager != nil {
 			progress = EXEC_IMAGE_BUILDING
+			targetPath, err = filepath.Abs(WS_PATH + key.Ns + "/" + key.Id)
+			if err != nil {
+				Info("AbsError (%s): %s\\n", WS_PATH+key.Ns+"/"+key.Id, err)
+				goto COMMON_HANDLING
+
+			}
+
+			Info("Target Path: %s\\n", targetPath)
+			err = os.Chdir(targetPath)
+			if err != nil {
+				Info("ChdirError (%s): %s\\n", targetPath, err)
+				goto COMMON_HANDLING
+			}
+
 			imgBuildTime := strings.Replace(strings.ToLower((strings.Split(time.Now().Format(time.RFC3339), "+"))[0]), ":", "-", 2)
 			tag := IMG_REGISTRY + "/she-ra/" + imgManager.ImgName + ":" + imgBuildTime
 			Info("%s\n", tag)
@@ -603,6 +655,10 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 				}
 				Info("Image Id=%s", imgId)
 			*/
+			// add job step finish to db and write to file.
+			fline := fmt.Sprintf("\n step %d finished. \n", progress)
+			WriteFile(fPath, lId, fline)
+
 			progress = EXEC_IMAGE_PUSHING
 			imgPushCmd := JobCommand{
 				Name: "docker",
@@ -641,6 +697,9 @@ func (d *JobManager) runJobExecution(key Key, seqno int32) {
 					goto COMMON_HANDLING
 				}
 			*/
+			// add job step finish to db and write to file.
+			fline = fmt.Sprintf("\n step %d finished. \n", progress)
+			WriteFile(fPath, lId, fline)
 
 		}
 
