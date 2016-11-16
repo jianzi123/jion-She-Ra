@@ -8,7 +8,7 @@ import (
 	"github.com/haveatry/She-Ra/api/jobs"
 	"github.com/haveatry/She-Ra/utils"
 	"github.com/magiconair/properties"
-//	"golang.org/x/net/websocket"
+	"golang.org/x/net/websocket"
 	"log"
 	"net/http"
 	"os"
@@ -118,11 +118,9 @@ func main() {
 	// Serve favicon.ico
 	http.HandleFunc("/favion.ico", icon)
 	// log router
-	//http.HandleFunc("/client", utils.Client)
-	//http.Handle("/echoLog", websocket.Handler(jobMng.Log))
-	// git 
-	http.HandleFunc("/git", utils.RecvGit)
-	
+	http.HandleFunc("/client", utils.Client)
+	http.Handle("/echoLog", websocket.Handler(jobMng.Log))
+
 	utils.Info("ready to serve on %s", basePath)
 	srv := endless.NewServer(addr, nil)
 	srv.SignalHooks[endless.PRE_SIGNAL][syscall.SIGUSR1] = append(

@@ -126,7 +126,6 @@ func (d *JobManager) createJob(request *restful.Request, response *restful.Respo
 	job := configdata.Job{}
 	//waitGroup := new(sync.WaitGroup)
 	if err := request.ReadEntity(&job); err != nil {
-		Info("createJob: %v. ", err)
 		response.AddHeader("Content-Type", "text/plain")
 		response.WriteErrorString(http.StatusInternalServerError, err.Error())
 		return
@@ -191,9 +190,6 @@ func (d *JobManager) createJob(request *restful.Request, response *restful.Respo
 	}
 
 	response.WriteHeaderAndEntity(http.StatusCreated, &job)
-
-	// add wsj
-	UpdateHook(job, key)	
 }
 
 func (d *JobManager) readJob(request *restful.Request, response *restful.Response) {
@@ -296,8 +292,6 @@ func (d *JobManager) updateJob(request *restful.Request, response *restful.Respo
 		response.WriteHeaderAndEntity(http.StatusCreated, &newJob)
 
 	}
-	// add wsj
-	UpdateHook(newJob, key)	
 	return
 }
 
@@ -323,19 +317,6 @@ func (d *JobManager) delJob(request *restful.Request, response *restful.Response
 		d.WaitExec[key].Wait()
 	}
 
-	// wsj add
-	// judge git empty or not
-	var f bool = false
-	h, g, b, err := GetGitInfo(ns, jobId)
-	if err != nil {
-		Info("Getinfo failed. %v.", err)
-	}else{
-		if g == "" {
-			Info("git empty")
-			f = true
-		}
-	}
-	
 	DeleteJobExecutions(key.Ns, key.Id)
 	err = DelJobViewRecord(key.Ns, key.Id)
 	if err != nil {
@@ -377,16 +358,6 @@ func (d *JobManager) delJob(request *restful.Request, response *restful.Response
 	d.accessLock.Unlock()
 
 	response.WriteHeader(http.StatusAccepted)
-	// wsj
-	if f != true {
-		hid, err := GetGitToDel(g, b, ns, jobId)
-		if err != nil {
-			Info("get Git info of other jobs occur error: %v.", err)
-		}else if hid == -1 {
-			Info("del hook, hook id: %s.", h)
-			Delhook(g, h)
-		} 
-	}
 }
 
 func (d *JobManager) execJob(request *restful.Request, response *restful.Response) {
@@ -442,17 +413,7 @@ func (d *JobManager) execJob(request *restful.Request, response *restful.Respons
 		}
 
 		d.WaitExec[key].Add(1)
-		// wsj add job start flag to write to file 
-		lId, err := CreateFname(int(jobExec.SeqNo))
-                if err != nil {
-                        Info("createFname fail", err)
-                }
-		fPath := fmt.Sprintf("%s%s/.%s/.shera/%s", WS_PATH, key.Ns, key.Id, EXECUTION_PATH)
-		fline := fmt.Sprintf("\n # namespace: %s; job: %s; seq: %d \n # JOB START: \n", key.Ns, key.Id, jobExec.SeqNo)
-		Info("fPath: %s; lId: %s.", fPath, lId)
-		WriteFile(fPath, lId, fline)
-		//go d.runJobExecution(key, jobExec.SeqNo)
-		go d.runJobExecution(key, jobExec.SeqNo, lId)
+		go d.runJobExecution(key, jobExec.SeqNo)
 		d.accessLock.Unlock()
 		return
 	} else {
@@ -462,8 +423,7 @@ func (d *JobManager) execJob(request *restful.Request, response *restful.Respons
 	}
 }
 
-//func (d *JobManager) runJobExecution(key Key, seqno int32) {
-func (d *JobManager) runJobExecution(key Key, seqno int32, lId string) {
+func (d *JobManager) runJobExecution(key Key, seqno int32) {
 	var retCode int
 	d.ExecChan[key] <- EXEC_GOROUTINE
 	Info("runJobExecution key.Ns=%s, key.Id=%s, seqno=%d\n", key.Ns, key.Id, seqno)
@@ -493,8 +453,9 @@ func (d *JobManager) runJobExecution(key Key, seqno int32, lId string) {
 		}
 
 		jdkVersion := job.JdkVersion
-		// wsj
+
 		fPath := fmt.Sprintf("%s%s/.%s/.shera/%s", WS_PATH, key.Ns, key.Id, EXECUTION_PATH)
+		lId := strconv.Itoa(int(seqno))
 		//pull code from git
 		if codeManager := job.GetCodeManager(); codeManager != nil && codeManager.GitConfig != nil {
 			Info("key.Ns=%s, key.Id=%s, seqno=%d begin to pulling code\n", key.Ns, key.Id, seqno)
@@ -527,7 +488,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32, lId string) {
 				Name: "git",
 				Args: []string{"init"},
 			}
-			if retCode = gitInitCmd.ExecAsync(d, key, seqno, progress, jdkVersion, lId); retCode != EXEC_FINISHED {
+			if retCode = gitInitCmd.ExecAsync(d, key, seqno, progress, jdkVersion); retCode != EXEC_FINISHED {
 				goto COMMON_HANDLING
 			}
 
@@ -535,7 +496,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32, lId string) {
 				Name: "git",
 				Args: []string{"config", "remote.origin.url", codeManager.GitConfig.Repo.Url},
 			}
-			if retCode = gitConfigCmd.ExecAsync(d, key, seqno, progress, jdkVersion, lId); retCode != EXEC_FINISHED {
+			if retCode = gitConfigCmd.ExecAsync(d, key, seqno, progress, jdkVersion); retCode != EXEC_FINISHED {
 				goto COMMON_HANDLING
 			}
 
@@ -543,11 +504,10 @@ func (d *JobManager) runJobExecution(key Key, seqno int32, lId string) {
 				Name: "git",
 				Args: []string{"pull", "origin", codeManager.GitConfig.Branch},
 			}
-			if retCode = gitPullCmd.ExecAsync(d, key, seqno, progress, jdkVersion, lId); retCode != EXEC_FINISHED {
+			if retCode = gitPullCmd.ExecAsync(d, key, seqno, progress, jdkVersion); retCode != EXEC_FINISHED {
 				goto COMMON_HANDLING
 			}
 			// add job step finish to db and write to file.
-			Info("fPath: %s.", fPath)
 			fline := fmt.Sprintf("\n step %d finished. \n", progress)
 			WriteFile(fPath, lId, fline)
 		}
@@ -585,7 +545,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32, lId string) {
 							Name: "ant",
 							Args: []string{"-f", buildManager.AntConfig[i].BuildFile, "-D" + buildManager.AntConfig[i].Properties},
 						}
-						retCode = antBuildCmd.ExecAsync(d, key, seqno, progress, jdkVersion, lId)
+						retCode = antBuildCmd.ExecAsync(d, key, seqno, progress, jdkVersion)
 						if retCode != EXEC_FINISHED {
 							goto COMMON_HANDLING
 
@@ -603,7 +563,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32, lId string) {
 							Args: []string{"-f", buildManager.MvnConfig[j].Pom, buildManager.MvnConfig[j].Goals},
 						}
 
-						retCode = mvnBuildCmd.ExecAsync(d, key, seqno, progress, jdkVersion, lId)
+						retCode = mvnBuildCmd.ExecAsync(d, key, seqno, progress, jdkVersion)
 						if retCode != EXEC_FINISHED {
 
 							goto COMMON_HANDLING
@@ -623,7 +583,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32, lId string) {
 							Name: cmdWithArgs[0],
 							Args: cmdWithArgs[1:],
 						}
-						retCode = shellCmd.ExecAsync(d, key, seqno, progress, jdkVersion, lId)
+						retCode = shellCmd.ExecAsync(d, key, seqno, progress, jdkVersion)
 						if retCode != EXEC_FINISHED {
 							goto COMMON_HANDLING
 
@@ -637,7 +597,6 @@ func (d *JobManager) runJobExecution(key Key, seqno int32, lId string) {
 			}
 
 			// add job step finish to db and write to file.
-			Info("fPath: %s.", fPath)
 			fline := fmt.Sprintf("\n step %d finished. \n", progress)
 			WriteFile(fPath, lId, fline)
 		}
@@ -673,7 +632,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32, lId string) {
 				},
 			}
 
-			retCode = imgBuildCmd.ExecAsync(d, key, seqno, progress, jdkVersion, lId)
+			retCode = imgBuildCmd.ExecAsync(d, key, seqno, progress, jdkVersion)
 			if retCode != EXEC_FINISHED {
 				goto COMMON_HANDLING
 			}
@@ -698,7 +657,6 @@ func (d *JobManager) runJobExecution(key Key, seqno int32, lId string) {
 			*/
 			// add job step finish to db and write to file.
 			fline := fmt.Sprintf("\n step %d finished. \n", progress)
-			Info("fPath: %s.", fPath)
 			WriteFile(fPath, lId, fline)
 
 			progress = EXEC_IMAGE_PUSHING
@@ -706,7 +664,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32, lId string) {
 				Name: "docker",
 				Args: []string{"push", tag},
 			}
-			retCode = imgPushCmd.ExecAsync(d, key, seqno, progress, jdkVersion, lId)
+			retCode = imgPushCmd.ExecAsync(d, key, seqno, progress, jdkVersion)
 			if retCode != EXEC_FINISHED {
 				goto COMMON_HANDLING
 			}
@@ -715,7 +673,7 @@ func (d *JobManager) runJobExecution(key Key, seqno int32, lId string) {
 				Name: "docker",
 				Args: []string{"rmi", tag},
 			}
-			retCode = imgRemoveCmd.ExecAsync(d, key, seqno, progress, jdkVersion, lId)
+			retCode = imgRemoveCmd.ExecAsync(d, key, seqno, progress, jdkVersion)
 			if retCode != EXEC_FINISHED {
 				goto COMMON_HANDLING
 			}
@@ -741,7 +699,6 @@ func (d *JobManager) runJobExecution(key Key, seqno int32, lId string) {
 			*/
 			// add job step finish to db and write to file.
 			fline = fmt.Sprintf("\n step %d finished. \n", progress)
-			Info("fPath: %s.", fPath)
 			WriteFile(fPath, lId, fline)
 
 		}
@@ -759,8 +716,6 @@ func (d *JobManager) runJobExecution(key Key, seqno int32, lId string) {
 		}
 		UpdateExecutionRecord(jobExec)
 		UpdateJobViewStatus(jobExec.Namespace, jobExec.JobId, jobExec.EndTime, jobExec.EndStatus)
-		fline := fmt.Sprintf("\n # JOB EXEC SUCCEED. \n", progress)
-		WriteFile(fPath, lId, fline)
 		if err := os.Chmod(fPath+lId, 0777); err != nil {
 			Info("job finished normally, when changing mode %v\n", err)
 		}
@@ -871,7 +826,7 @@ func (d *JobManager) killJobExecution(request *restful.Request, response *restfu
 	}
 }
 
-func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, jdkVersion string, lId string) int {
+func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, jdkVersion string) int {
 
 	var recvCode int
 	jobCmd := exec.Command(cmd.Name, cmd.Args...)
@@ -931,7 +886,6 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, 
 		fPath := fmt.Sprintf("%s%s/.%s/.shera/%s", WS_PATH, key.Ns, key.Id, EXECUTION_PATH)
 		lId := strconv.Itoa(int(seqno))
 		fline := fmt.Sprintf("\nFailed in %d. \n", progress)
-		Info("fPath: %s.", fPath)
 		WriteFile(fPath, lId, fline)
 		if err := os.Chmod(fPath+lId, 0777); err != nil {
 			Info("when changing mode, %v\n", err)
@@ -943,10 +897,11 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, 
 	}
 
 	done := make(chan error)
-	go func(key Key, num int, progress int, stdout io.ReadCloser, errout io.ReadCloser, lId string) {
+	go func(key Key, number int, progress int, stdout io.ReadCloser, errout io.ReadCloser) {
 
-		fPath := fmt.Sprintf("%s%s/.%s/.shera/%s", WS_PATH,  key.Ns, key.Id, EXECUTION_PATH)
-
+		fPath := fmt.Sprintf("%s%s/.%s/.shera/%s", WS_PATH, key.Ns, key.Id, EXECUTION_PATH)
+		lId := strconv.Itoa(number)
+		//Info("waiting for command to finish.")
 		reader := bufio.NewReader(stdout)
 		erreader := bufio.NewReader(errout)
 		for {
@@ -955,10 +910,6 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, 
 				//Info("exec cmd finished. %v\n", err)
 				break
 			}
-
-			//buf := make([]byte, 100, 1024)
-			//len, err := reader.Read(buf)
-			//fmt.Println("line buf: ", string(buf))
 			WriteFile(fPath, lId, line)
 		}
 		for {
@@ -970,7 +921,7 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, 
 			WriteFile(fPath, lId, line)
 		}
 		done <- jobCmd.Wait()
-	}(key, int(seqno), int(progress), stdout, errout, lId)
+	}(key, int(seqno), int(progress), stdout, errout)
 
 	for {
 		select {
@@ -996,12 +947,6 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, 
 				}
 				UpdateExecutionRecord(jobExec)
 				UpdateJobViewStatus(jobExec.Namespace, jobExec.JobId, jobExec.EndTime, jobExec.EndStatus)
-				fPath := fmt.Sprintf("%s%s/.%s/.shera/%s", WS_PATH, key.Ns, key.Id, EXECUTION_PATH)
-				fline := fmt.Sprintf("\nFailed in %d. \n # JOB FINISHED. \n", progress)
-				WriteFile(fPath, lId, fline)
-				if err := os.Chmod(fPath+lId, 0777); err != nil {
-					Info("when changing mode, %v\n", err)
-				}
 				return recvCode
 			}
 			break
@@ -1026,13 +971,6 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, 
 			}
 			UpdateExecutionRecord(jobExec)
 			UpdateJobViewStatus(jobExec.Namespace, jobExec.JobId, jobExec.EndTime, jobExec.EndStatus)
-			// wsj add
-			fPath := fmt.Sprintf("%s%s/.%s/.shera/%s", WS_PATH, key.Ns, key.Id, EXECUTION_PATH)
-			fline := fmt.Sprintf("\nFailed in %d. \n # JOB FINISHED. \n", progress)
-			WriteFile(fPath, lId, fline)
-			if err := os.Chmod(fPath+lId, 0777); err != nil {
-				Info("when changing mode, %v\n", err)
-			}
 			return int(EXEC_TIMEOUT)
 
 		case err = <-done:
@@ -1052,8 +990,8 @@ func (cmd *JobCommand) ExecAsync(d *JobManager, key Key, seqno, progress int32, 
 				UpdateExecutionRecord(jobExec)
 				UpdateJobViewStatus(jobExec.Namespace, jobExec.JobId, jobExec.EndTime, jobExec.EndStatus)
 				fPath := fmt.Sprintf("%s%s/.%s/.shera/%s", WS_PATH, key.Ns, key.Id, EXECUTION_PATH)
-				//lId := strconv.Itoa(int(seqno))
-				fline := fmt.Sprintf("\nFailed in %d. \n # JOB FINISHED. \n", progress)
+				lId := strconv.Itoa(int(seqno))
+				fline := fmt.Sprintf("\nFailed in %d. \n", progress)
 				WriteFile(fPath, lId, fline)
 				if err := os.Chmod(fPath+lId, 0777); err != nil {
 					Info("when changing mode, %v\n", err)
@@ -1186,84 +1124,4 @@ func deleteJdk(request *restful.Request, response *restful.Response) {
 	}
 	response.WriteHeader(http.StatusAccepted)
 
-}
-
-func (d *JobManager) showLog (request *restful.Request, response *restful.Response) {
-	ns := request.PathParameter("namespace")
-	job := request.PathParameter("job_id")
-	seq := request.PathParameter("seqno")
-	fmt.Println(ns, ";",  job, ";", seq)
-	var seek int
-	if err := request.ReadEntity(&seek); err != nil {
-		Info("seek: %d; err: %v ", seek, err)
-                response.AddHeader("Content-Type", "text/plain")
-                response.WriteErrorString(http.StatusInternalServerError, err.Error())
-                return
-        }
-	pName := fmt.Sprintf("%s%s/.%s/.shera/%s", WS_PATH, ns, job, EXECUTION_PATH)
-	fmt.Println("path Name: ", pName)
-	fName, err := FindFname(pName, seq)
-	if err != nil {
-		Info("FindFname failed. %v", err)
-		response.AddHeader("Content-Type", "text/plain")
-		response.WriteErrorString(http.StatusInternalServerError, err.Error())
-                return
-	}
-	
-	log, err := NewComlog("", 0, false)
-	name := pName + fName
-	len, buf, err := ReadFileToEnd(name, seek)
-	if err != nil {
-		Info("ReadFile failed. %v", err)
-		response.AddHeader("Content-Type", "text/plain")
-		response.WriteErrorString(http.StatusInternalServerError, err.Error())
-                return
-		
-	}
-	log.Content = buf 
-	log.Seek = len
-
-	s, err := strconv.Atoi(seq)
-
-	flag, err := GetFinishStatus(ns, job, int32(s))
-	if err != nil {
-        	Info("Get finish status failed: %v", err)
-	}
-	if flag == true {
-		log.Flag = true	
-	}else {
-		flag, err = CheckFmode(name)
-		if err != nil {
-			Info("Check file mode failed: %v", err)
-		}else if flag == true {
-			log.Flag = true	
-		}
-	}
-	if log.Flag == true {
-		//log.Content = log.Content + "\0"
-	}
-	response.WriteHeaderAndEntity(http.StatusCreated, log)	
-}
-
-func (d *JobManager) gitChange (request *restful.Request, response *restful.Response) {
-	ns := request.PathParameter("namespace")
-	job := request.PathParameter("job_id")
-	fmt.Println(request)
-	var git Comgit
-	if err := request.ReadEntity(&git); err != nil {
-                response.AddHeader("Content-Type", "text/plain")
-                response.WriteErrorString(http.StatusInternalServerError, err.Error())
-                return
-        }
-	Info("%s %s", ns, job)
-	//git, _ = NewComgit("", ns, job, false)
-	//read data to database
-	time, err := GetGitTime(ns, job)
-	if err == nil {
-		if len(time) == 1 {
-			git.Time = strconv.Itoa(int(time[0]))
-			git.Flag = true	
-		}
-	}
-	response.WriteHeaderAndEntity(http.StatusCreated, git)
 }

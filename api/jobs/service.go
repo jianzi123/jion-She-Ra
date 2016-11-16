@@ -76,26 +76,7 @@ func (d JobManager) WebService() *restful.WebService {
 		Operation("execJob").
 		Param(ws.PathParameter("namespace", "identifier of the namespace").DataType("string")).
 		Param(ws.PathParameter("job-id", "identifier of the job").DataType("string")))
-	// get log
-	var seek int
-	ws.Route(ws.POST("/jobs/exec/{namespace}/{job_id}/{seqno}").To(d.showLog).
-		// docs
-		Doc("get seqno log").
-		Operation("showLog").
-		Param(ws.PathParameter("namespace", "identifier of the namespace").DataType("string")).
-		Param(ws.PathParameter("job_id", "identifier of the job").DataType("string")).
-		Param(ws.PathParameter("seqno", "identifier of the seqno of exec job").DataType("string")).
-		Reads(seek).// seek
-		Writes(Comlog{}))
-	// get git change
-	var git string
-	ws.Route(ws.POST("/jobs/git/{namespace}/{job_id}").To(d.gitChange).
-		Doc("get change of project in git.").
-		Operation("gitChange").
-		Param(ws.PathParameter("namespace", "identifier of the namespace").DataType("string")).
-		Param(ws.PathParameter("job_id", "identifier of the job").DataType("string")).
-		Reads(git).// ssh git or http git 
-		Writes(Comgit{}))
+
 	ws.Route(ws.DELETE("/jobs/del/{namespace}/{job-id}").To(d.delJob).
 		// docs
 		Doc("delete a job").
