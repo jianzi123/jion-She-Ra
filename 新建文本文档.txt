@@ -1,0 +1,9 @@
+http://cncc.bingj.com/cache.aspx?q=kubectl+csr&d=5000438871360622&mkt=zh-CN&setlang=zh-CN&w=Tt_XMu-0shjh76KiGqXFtFDstuAcOwuD
+
+https://jimmysong.io/kubernetes-handbook/guide/authenticate-across-clusters-kubeconfig.html
+
+https://github.com/kubernetes/kubernetes/issues/1755
+
+
+
+http://www.zhimengzhe.com/bianchengjiaocheng/qitabiancheng/388943.html

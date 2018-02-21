@@ -1,0 +1,17 @@
+cat > devuser-csr.json <<eof 
+{ "cn": "devuser", "hosts": [], "key": "algo": "rsa", "size": 2048 },
+ "names": [ "c": "cn", "st": "beijing", "l": "o": "k8s", "ou": "system" } ]
+
+
+cat > ca-config.json <<eof { "signing": "default": "expiry": "87600h" }, 
+"profiles": "kubernetes": "usages": [ "signing", "key encipherment",
+ "server auth", "client auth" ], } eof 
+ 
+ 
+ cfssl gencert -ca=ca.crt -ca-key=ca.key -config=ca-config.json -profile=kubernetes devuser-csr.json | cfssljson -bare devuser
+ 
+ 
+ 
+ 
+kubectl config set-cluster kubernetes-cluster --server=https://192.168.56.81:6677
+kubectl config set-context ctx-dev --namespace=development --cluster=kubernetes-cluster --user=dev
